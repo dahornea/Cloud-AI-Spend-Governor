@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SpendGovernor.Api/SpendGovernor.Api.csproj" />
+    <Project Path="src/SpendGovernor.Core/SpendGovernor.Core.csproj" />
+    <Project Path="src/SpendGovernor.Infrastructure/SpendGovernor.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SpendGovernor.Tests/SpendGovernor.Tests.csproj" />
+  </Folder>
+</Solution>

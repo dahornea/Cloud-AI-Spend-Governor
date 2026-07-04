@@ -1,0 +1,22 @@
+version: 1
+currency: EUR
+defaultRegion: westeurope
+hoursPerMonth: 730
+
+rules:
+  - id: ai-total-cost
+    description: Warn when AI monthly cost exceeds 300 EUR
+    type: ai_monthly_cost
+    threshold: 300
+    action: warn
+
+environments:
+  production:
+    monthlyBudget: 3000
+    action: block
+
+ai:
+  enabled: true
+  monthlyBudget: 300
+  maxCostPerWorkflowMonthly: 100
+  action: warn

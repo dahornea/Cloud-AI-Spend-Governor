@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cloud & AI Spend Governor</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark">SG</span>
+      <div>
+        <strong>Spend Governor</strong>
+        <small>Cloud & AI cost firewall</small>
+      </div>
+    </div>
+    <nav>
+      <button class="nav-button active" data-view="overview">Overview</button>
+      <button class="nav-button" data-view="analyses">Analyses</button>
+      <button class="nav-button" data-view="policies">Policies</button>
+      <button class="nav-button" data-view="approvals">Approvals</button>
+      <button class="nav-button" data-view="audit">Audit</button>
+    </nav>
+    <div class="login-box">
+      <label for="emailInput">User</label>
+      <input id="emailInput" type="email" autocomplete="email">
+      <button id="switchUserButton">Switch</button>
+    </div>
+  </aside>
+
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <h1 id="pageTitle">Overview</h1>
+        <p id="pageSubtitle"></p>
+      </div>
+      <div class="context-controls">
+        <label>
+          Workspace
+          <select id="workspaceSelect"></select>
+        </label>
+        <label>
+          Project
+          <select id="projectSelect"></select>
+        </label>
+      </div>
+    </header>
+
+    <section id="statusBanner" class="status-banner hidden"></section>
+
+    <section id="overviewView" class="view active">
+      <div class="metric-grid">
+        <div class="metric-panel">
+          <span>Total PRs</span>
+          <strong id="metricPrs">0</strong>
+        </div>
+        <div class="metric-panel">
+          <span>Monthly Delta</span>
+          <strong id="metricDelta">EUR 0.00</strong>
+        </div>
+        <div class="metric-panel">
+          <span>Warned or Blocked</span>
+          <strong id="metricRisk">0</strong>
+        </div>
+        <div class="metric-panel">
+          <span>Repository</span>
+          <strong id="metricRepo">-</strong>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <label>
+          Demo PR
+          <select id="scenarioSelect">
+            <option value="scenario-cheap-change">Cheap change</option>
+            <option value="scenario-expensive-cloud-change">Expensive cloud change</option>
+            <option value="scenario-expensive-ai-workflow">Expensive AI workflow</option>
+            <option value="small-vm">Small Azure VM</option>
+            <option value="sku-threshold">SKU threshold</option>
+            <option value="unknown-resource">Unknown resource</option>
+            <option value="approval-required">Approval required</option>
+            <option value="no-cloud-impact">No cloud impact</option>
+          </select>
+        </label>
+        <button id="runDemoButton">Run Demo PR</button>
+        <div id="devDemoControls" class="dev-demo-controls hidden">
+          <button id="seedDemoButton" type="button">Seed Demo Data</button>
+          <button id="resetDemoButton" type="button">Reset Demo Data</button>
+        </div>
+        <button id="exportSummaryButton">Export 30-day CSV</button>
+      </div>
+
+      <h2>Latest Analyses</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>PR</th>
+              <th>Repository</th>
+              <th>Environment</th>
+              <th>Status</th>
+              <th>Decision</th>
+              <th>Delta</th>
+              <th>Confidence</th>
+              <th>Created</th>
+              <th>Completed</th>
+            </tr>
+          </thead>
+          <tbody id="latestAnalysesBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="analysesView" class="view">
+      <div class="split">
+        <div>
+          <div class="section-heading">
+            <h2>PR Analyses</h2>
+            <button id="refreshAnalysesButton">Refresh</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>PR</th>
+                  <th>Repository</th>
+                  <th>Environment</th>
+                  <th>Status</th>
+                  <th>Decision</th>
+                  <th>Delta</th>
+                  <th>Confidence</th>
+                  <th>Created</th>
+                  <th>Completed</th>
+                </tr>
+              </thead>
+              <tbody id="analysesBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div id="analysisDetail" class="detail-panel"></div>
+      </div>
+    </section>
+
+    <section id="policiesView" class="view">
+      <div class="section-heading">
+        <h2>Budgets & Policies</h2>
+        <button id="savePolicyButton">Save Policy</button>
+      </div>
+      <textarea id="policyEditor" spellcheck="false"></textarea>
+      <div id="policyValidation" class="validation-panel"></div>
+    </section>
+
+    <section id="approvalsView" class="view">
+      <div class="split">
+        <div>
+          <h2>Required Approvals</h2>
+          <div id="approvalRequiredList" class="list-panel"></div>
+        </div>
+        <div>
+          <h2>Granted Approvals</h2>
+          <div id="grantedApprovalsList" class="list-panel"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="auditView" class="view">
+      <div class="section-heading">
+        <h2>Audit Events</h2>
+        <button id="refreshAuditButton">Refresh</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Event</th>
+              <th>Message</th>
+            </tr>
+          </thead>
+          <tbody id="auditBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+version: 1
+currency: EUR
+defaultRegion: westeurope
+hoursPerMonth: 730
+
+rules:
+  - id: dev-delta-limit
+    description: Block dev PRs above 100 EUR/month
+    type: monthly_delta
+    threshold: 100
+    action: block
+
+environments:
+  dev:
+    monthlyBudget: 100
+    action: block
+
+ai:
+  enabled: true
+  monthlyBudget: 300
+  maxCostPerWorkflowMonthly: 100
+  action: warn

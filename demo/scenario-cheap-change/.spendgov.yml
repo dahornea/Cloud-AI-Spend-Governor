@@ -1,0 +1,22 @@
+version: 1
+currency: EUR
+defaultRegion: westeurope
+hoursPerMonth: 730
+
+rules:
+  - id: dev-delta-limit
+    description: Warn when a dev PR adds more than 100 EUR/month
+    type: monthly_delta
+    threshold: 100
+    action: warn
+
+environments:
+  dev:
+    monthlyBudget: 200
+    action: warn
+
+ai:
+  enabled: true
+  monthlyBudget: 300
+  maxCostPerWorkflowMonthly: 100
+  action: warn

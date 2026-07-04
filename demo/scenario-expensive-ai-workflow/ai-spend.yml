@@ -1,0 +1,9 @@
+aiWorkflows:
+  - id: sales-agent
+    provider: azure-openai
+    model: gpt-4.1
+    estimatedMonthlyRequests: 100000
+    averageInputTokens: 4000
+    averageOutputTokens: 1200
+    maxAgentSteps: 8
+    environment: production
