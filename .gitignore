@@ -1,0 +1,65 @@
+# Build output
+bin/
+obj/
+**/bin/
+**/obj/
+
+# Visual Studio / Rider / editor state
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.rsuser
+_ReSharper.Caches/
+
+# Test and coverage output
+TestResults/
+coverage/
+coverage*/
+*.coverage
+*.coveragexml
+*.trx
+*.opencover.xml
+*.cobertura.xml
+
+# Logs and local runtime output
+*.log
+logs/
+api.out.log
+api.err.log
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+appsettings.Local.json
+appsettings.*.local.json
+
+# Local databases and SQL Server files
+*.db
+*.db-shm
+*.db-wal
+*.mdf
+*.ldf
+
+# NuGet artifacts
+packages/
+*.nupkg
+*.snupkg
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.orig
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local Codex/agent workspace state
+.agents/
+.codex/
