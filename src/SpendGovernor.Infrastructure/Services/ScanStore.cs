@@ -29,7 +29,8 @@ public sealed class ScanStore : IScanStore
             Currency = request.Settings.Currency,
             ConfidenceLevel = ScanConfidenceLevel.Unknown,
             DashboardReportUrl = request.DashboardBaseUrl,
-            GitHubPullRequestUrl = $"https://github.com/{repository.FullName}/pull/{request.PullRequestNumber}"
+            GitHubPullRequestUrl = $"https://github.com/{repository.FullName}/pull/{request.PullRequestNumber}",
+            ReportPublishingStatus = "Pending"
         };
         dbContext.PullRequestScans.Add(scan);
         await dbContext.SaveChangesAsync(cancellationToken);
@@ -113,6 +114,42 @@ public sealed class ScanStore : IScanStore
             .OrderByDescending(scan => scan.UpdatedAt)
             .Select(scan => scan.GitHubCommentId)
             .FirstOrDefault();
+    }
+
+    public async Task<string?> FindExistingGitHubCheckRunIdAsync(Guid repositoryId, int pullRequestNumber, CancellationToken cancellationToken = default)
+    {
+        var scans = await dbContext.PullRequestScans
+            .Where(scan => scan.RepositoryId == repositoryId && scan.PullRequestNumber == pullRequestNumber && scan.GitHubCheckRunId != null)
+            .AsNoTracking()
+            .ToArrayAsync(cancellationToken);
+        return scans
+            .OrderByDescending(scan => scan.UpdatedAt)
+            .Select(scan => scan.GitHubCheckRunId)
+            .FirstOrDefault();
+    }
+
+    public async Task SaveGitHubPublishingResultAsync(
+        Guid scanId,
+        string? gitHubCommentId,
+        string? gitHubCheckRunId,
+        string? gitHubReportUrl,
+        string reportPublishingStatus,
+        string? reportPublishingError,
+        CancellationToken cancellationToken = default)
+    {
+        var scan = await dbContext.PullRequestScans.FindAsync([scanId], cancellationToken);
+        if (scan is null)
+        {
+            return;
+        }
+
+        scan.GitHubCommentId = gitHubCommentId ?? scan.GitHubCommentId;
+        scan.GitHubCheckRunId = gitHubCheckRunId ?? scan.GitHubCheckRunId;
+        scan.GitHubReportUrl = gitHubReportUrl ?? scan.GitHubReportUrl;
+        scan.ReportPublishingStatus = string.IsNullOrWhiteSpace(reportPublishingStatus) ? "Unknown" : reportPublishingStatus;
+        scan.ReportPublishingError = reportPublishingError;
+        scan.UpdatedAt = DateTimeOffset.UtcNow;
+        await dbContext.SaveChangesAsync(cancellationToken);
     }
 
     public async Task<IReadOnlyList<PullRequestScan>> GetLatestScansForRepositoryAsync(Guid repositoryId, int take = 50, CancellationToken cancellationToken = default)

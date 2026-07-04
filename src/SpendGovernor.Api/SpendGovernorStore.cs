@@ -261,16 +261,8 @@ public sealed class SpendGovernorStore
     {
         lock (gate)
         {
-            foreach (var audit in result.AuditEvents)
-            {
-                audit.WorkspaceId = project.WorkspaceId;
-                audit.ProjectId = project.Id;
-            }
-
-            analyses[result.Analysis.Id] = result;
-            analysisRequests[result.Analysis.Id] = request;
+            RecordAnalysisCore(project, result, request);
             var commentState = githubComments.Upsert(result.Analysis, result.CommentMarkdown, result.CheckConclusion, existingGitHubCommentId);
-            auditEvents.AddRange(result.AuditEvents);
             auditEvents.Add(new AuditEvent
             {
                 WorkspaceId = project.WorkspaceId,
@@ -289,6 +281,27 @@ public sealed class SpendGovernorStore
             });
             return commentState;
         }
+    }
+
+    public void RecordAnalysis(Project project, AnalysisResult result, AnalysisRequest request)
+    {
+        lock (gate)
+        {
+            RecordAnalysisCore(project, result, request);
+        }
+    }
+
+    private void RecordAnalysisCore(Project project, AnalysisResult result, AnalysisRequest request)
+    {
+        foreach (var audit in result.AuditEvents)
+        {
+            audit.WorkspaceId = project.WorkspaceId;
+            audit.ProjectId = project.Id;
+        }
+
+        analyses[result.Analysis.Id] = result;
+        analysisRequests[result.Analysis.Id] = request;
+        auditEvents.AddRange(result.AuditEvents);
     }
 
     public GitHubPrCommentState? GetGitHubComment(string owner, string name, int pullRequestNumber)

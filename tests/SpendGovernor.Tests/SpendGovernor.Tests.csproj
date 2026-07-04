@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.0" />
+    <ProjectReference Include="..\..\src\SpendGovernor.Api\SpendGovernor.Api.csproj" />
     <ProjectReference Include="..\..\src\SpendGovernor.Core\SpendGovernor.Core.csproj" />
     <ProjectReference Include="..\..\src\SpendGovernor.Infrastructure\SpendGovernor.Infrastructure.csproj" />
   </ItemGroup>

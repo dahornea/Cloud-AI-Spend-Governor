@@ -67,12 +67,17 @@ public sealed class SpendGovernorDbContext : DbContext
         entity.Property(scan => scan.FailureReason).HasMaxLength(2000);
         entity.Property(scan => scan.DashboardReportUrl).HasMaxLength(1000);
         entity.Property(scan => scan.GitHubCommentId).HasMaxLength(200);
+        entity.Property(scan => scan.GitHubCheckRunId).HasMaxLength(200);
+        entity.Property(scan => scan.GitHubReportUrl).HasMaxLength(1000);
         entity.Property(scan => scan.GitHubPullRequestUrl).HasMaxLength(1000);
+        entity.Property(scan => scan.ReportPublishingStatus).HasMaxLength(50).HasDefaultValue("Pending").IsRequired();
+        entity.Property(scan => scan.ReportPublishingError).HasMaxLength(2000);
         entity.HasIndex(scan => new { scan.RepositoryId, scan.PullRequestNumber });
         entity.HasIndex(scan => scan.Status);
         entity.HasIndex(scan => scan.Decision);
         entity.HasIndex(scan => scan.CreatedAt);
         entity.HasIndex(scan => scan.GitHubCommentId);
+        entity.HasIndex(scan => scan.GitHubCheckRunId);
         entity.HasMany(scan => scan.CostBreakdownItems)
             .WithOne(item => item.PullRequestScan)
             .HasForeignKey(item => item.PullRequestScanId)

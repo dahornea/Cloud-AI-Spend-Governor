@@ -17,8 +17,18 @@ public interface IScanStore
 
     Task<string?> FindExistingGitHubCommentIdAsync(Guid repositoryId, int pullRequestNumber, CancellationToken cancellationToken = default);
 
+    Task<string?> FindExistingGitHubCheckRunIdAsync(Guid repositoryId, int pullRequestNumber, CancellationToken cancellationToken = default);
+
+    Task SaveGitHubPublishingResultAsync(
+        Guid scanId,
+        string? gitHubCommentId,
+        string? gitHubCheckRunId,
+        string? gitHubReportUrl,
+        string reportPublishingStatus,
+        string? reportPublishingError,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<PullRequestScan>> GetLatestScansForRepositoryAsync(Guid repositoryId, int take = 50, CancellationToken cancellationToken = default);
 
     Task<PullRequestScan?> GetScanDetailsAsync(Guid scanId, CancellationToken cancellationToken = default);
 }
-

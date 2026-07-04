@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using SpendGovernor.Infrastructure.Persistence;
 
@@ -11,9 +12,11 @@ using SpendGovernor.Infrastructure.Persistence;
 namespace SpendGovernor.Infrastructure.Migrations
 {
     [DbContext(typeof(SpendGovernorDbContext))]
-    partial class SpendGovernorDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260704010953_GitHubPublishingMetadata")]
+    partial class GitHubPublishingMetadata
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

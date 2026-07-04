@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -19,6 +20,10 @@ builder.Services.AddSingleton<AiModelPriceCatalog>();
 builder.Services.AddSingleton<MonthlyCostEstimator>();
 builder.Services.AddSingleton<AnalysisEngine>();
 builder.Services.AddSingleton<SpendGovernorStore>();
+builder.Services.Configure<GitHubIntegrationOptions>(builder.Configuration.GetSection("GitHub"));
+builder.Services.AddHttpClient();
+builder.Services.AddSingleton<IGitHubApiClient, GitHubApiClient>();
+builder.Services.AddScoped<IGitHubPullRequestReporter>(services => GitHubReporterFactory.Create(services));
 builder.Services.AddDbContext<SpendGovernorDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("SpendGovernorDb")
         ?? "Server=(localdb)\\MSSQLLocalDB;Database=Spend-Governor;Trusted_Connection=True;TrustServerCertificate=True;MultipleActiveResultSets=true"));
@@ -132,7 +137,7 @@ app.MapGet("/api/projects/{projectId:guid}/analyses", async (Guid projectId, Htt
     return Results.Ok(scans.Select(AnalysisListItem.FromScan));
 });
 
-app.MapPost("/api/projects/{projectId:guid}/analyses", async (Guid projectId, RunAnalysisRequest request, HttpContext context, SpendGovernorStore store, AnalysisEngine engine, IRepositoryStore repositoryStore, IScanStore scanStore) =>
+app.MapPost("/api/projects/{projectId:guid}/analyses", async (Guid projectId, RunAnalysisRequest request, HttpContext context, SpendGovernorStore store, AnalysisEngine engine, IRepositoryStore repositoryStore, IScanStore scanStore, IGitHubPullRequestReporter gitHubReporter) =>
 {
     var user = CurrentUser(context, store);
     var project = store.GetProjectForUser(projectId, user.Id);
@@ -146,12 +151,12 @@ app.MapPost("/api/projects/{projectId:guid}/analyses", async (Guid projectId, Ru
     var scan = await scanStore.CreateScanAsync(repository, analysisRequest, context.RequestAborted);
     await scanStore.MarkRunningAsync(scan.Id, DateTimeOffset.UtcNow, context.RequestAborted);
     var result = engine.Analyze(analysisRequest);
-    await PersistScanResultAsync(project, repository, scan.Id, result, analysisRequest, store, scanStore, context.RequestAborted);
+    await PersistScanResultAsync(project, repository, scan.Id, result, analysisRequest, gitHubReporter, scanStore, context.RequestAborted);
     var persisted = await scanStore.GetScanDetailsAsync(scan.Id, context.RequestAborted);
     return Results.Created($"/api/analyses/{scan.Id}", AnalysisDetailResponse.FromScan(persisted!));
 });
 
-app.MapPost("/api/demo/projects/{projectId:guid}/analyze", async (Guid projectId, DemoRunRequest request, HttpContext context, SpendGovernorStore store, AnalysisEngine engine, IRepositoryStore repositoryStore, IScanStore scanStore) =>
+app.MapPost("/api/demo/projects/{projectId:guid}/analyze", async (Guid projectId, DemoRunRequest request, HttpContext context, SpendGovernorStore store, AnalysisEngine engine, IRepositoryStore repositoryStore, IScanStore scanStore, IGitHubPullRequestReporter gitHubReporter) =>
 {
     var user = CurrentUser(context, store);
     var project = store.GetProjectForUser(projectId, user.Id);
@@ -165,7 +170,7 @@ app.MapPost("/api/demo/projects/{projectId:guid}/analyze", async (Guid projectId
     var scan = await scanStore.CreateScanAsync(repository, analysisRequest, context.RequestAborted);
     await scanStore.MarkRunningAsync(scan.Id, DateTimeOffset.UtcNow, context.RequestAborted);
     var result = engine.Analyze(analysisRequest);
-    await PersistScanResultAsync(project, repository, scan.Id, result, analysisRequest, store, scanStore, context.RequestAborted);
+    await PersistScanResultAsync(project, repository, scan.Id, result, analysisRequest, gitHubReporter, scanStore, context.RequestAborted);
     var persisted = await scanStore.GetScanDetailsAsync(scan.Id, context.RequestAborted);
     return Results.Created($"/api/analyses/{scan.Id}", AnalysisDetailResponse.FromScan(persisted!));
 });
@@ -181,6 +186,7 @@ if (app.Environment.IsDevelopment())
         AnalysisEngine engine,
         IRepositoryStore repositoryStore,
         IScanStore scanStore,
+        IGitHubPullRequestReporter gitHubReporter,
         SpendGovernorDbContext dbContext) =>
     {
         var user = CurrentUser(context, store);
@@ -195,7 +201,7 @@ if (app.Environment.IsDevelopment())
             var scan = await scanStore.CreateScanAsync(repository, request, context.RequestAborted);
             await scanStore.MarkRunningAsync(scan.Id, DateTimeOffset.UtcNow, context.RequestAborted);
             var result = engine.Analyze(request);
-            await PersistScanResultAsync(project, repository, scan.Id, result, request, store, scanStore, context.RequestAborted);
+            await PersistScanResultAsync(project, repository, scan.Id, result, request, gitHubReporter, scanStore, context.RequestAborted);
             var persisted = await scanStore.GetScanDetailsAsync(scan.Id, context.RequestAborted);
             if (persisted is not null)
             {
@@ -226,7 +232,7 @@ app.MapGet("/api/analyses/{analysisId:guid}", async (Guid analysisId, HttpContex
     return Results.Ok(AnalysisDetailResponse.FromScan(scan));
 });
 
-app.MapPost("/api/analyses/{analysisId:guid}/rerun", async (Guid analysisId, HttpContext context, SpendGovernorStore store, AnalysisEngine engine, IRepositoryStore repositoryStore, IScanStore scanStore) =>
+app.MapPost("/api/analyses/{analysisId:guid}/rerun", async (Guid analysisId, HttpContext context, SpendGovernorStore store, AnalysisEngine engine, IRepositoryStore repositoryStore, IScanStore scanStore, IGitHubPullRequestReporter gitHubReporter) =>
 {
     var user = CurrentUser(context, store);
     var original = store.GetAnalysisForUser(analysisId, user.Id);
@@ -251,7 +257,7 @@ app.MapPost("/api/analyses/{analysisId:guid}/rerun", async (Guid analysisId, Htt
     var repository = await EnsureRepositoryAsync(project, repositoryStore, context.RequestAborted);
     var scan = await scanStore.CreateScanAsync(repository, request, context.RequestAborted);
     await scanStore.MarkRunningAsync(scan.Id, DateTimeOffset.UtcNow, context.RequestAborted);
-    await PersistScanResultAsync(project, repository, scan.Id, rerun, request, store, scanStore, context.RequestAborted);
+    await PersistScanResultAsync(project, repository, scan.Id, rerun, request, gitHubReporter, scanStore, context.RequestAborted);
     var persisted = await scanStore.GetScanDetailsAsync(scan.Id, context.RequestAborted);
     return Results.Created($"/api/analyses/{scan.Id}", AnalysisDetailResponse.FromScan(persisted!));
 });
@@ -406,13 +412,24 @@ app.MapGet("/api/github/installations/callback", (HttpContext context, SpendGove
     return Results.Ok(new { project.Id, project.GitHubInstallationId });
 });
 
-app.MapPost("/api/github/webhooks", async (HttpContext context, SpendGovernorStore store, AnalysisEngine engine, IConfiguration configuration, IRepositoryStore repositoryStore, IScanStore scanStore) =>
+app.MapPost("/api/github/webhooks", async (
+    HttpContext context,
+    SpendGovernorStore store,
+    AnalysisEngine engine,
+    IRepositoryStore repositoryStore,
+    IScanStore scanStore,
+    IGitHubPullRequestReporter gitHubReporter,
+    IOptions<GitHubIntegrationOptions> gitHubOptions,
+    IWebHostEnvironment environment) =>
 {
     using var reader = new StreamReader(context.Request.Body);
     var payload = await reader.ReadToEndAsync();
     var signature = context.Request.Headers["X-Hub-Signature-256"].ToString();
-    var secret = configuration["GitHub:WebhookSecret"] ?? "dev-secret";
-    if (!GitHubSignatureVerifier.VerifySha256(payload, signature, secret))
+    var options = gitHubOptions.Value;
+    var isUnsignedDevelopmentWebhook = environment.IsDevelopment()
+        && options.AllowUnsignedWebhooksInDevelopment
+        && string.IsNullOrWhiteSpace(signature);
+    if (!isUnsignedDevelopmentWebhook && !GitHubSignatureVerifier.VerifySha256(payload, signature, options.WebhookSecret))
     {
         return Results.Unauthorized();
     }
@@ -420,7 +437,7 @@ app.MapPost("/api/github/webhooks", async (HttpContext context, SpendGovernorSto
     using var document = JsonDocument.Parse(payload);
     var root = document.RootElement;
     var action = root.TryGetProperty("action", out var actionElement) ? actionElement.GetString() : "";
-    if (action is not ("opened" or "synchronize" or "reopened" or "closed"))
+    if (action is not ("opened" or "synchronize" or "reopened" or "ready_for_review"))
     {
         return Results.Accepted(value: new { skipped = true, reason = "Unsupported pull_request action." });
     }
@@ -460,16 +477,27 @@ app.MapPost("/api/github/webhooks", async (HttpContext context, SpendGovernorSto
     var scan = await scanStore.CreateScanAsync(repositoryRecord, request, context.RequestAborted);
     await scanStore.MarkRunningAsync(scan.Id, DateTimeOffset.UtcNow, context.RequestAborted);
     var result = engine.Analyze(request);
-    var comment = await PersistScanResultAsync(project, repositoryRecord, scan.Id, result, request, store, scanStore, context.RequestAborted);
-    store.AddAudit(project.WorkspaceId, project.Id, result.Analysis.Id, "GitHub PR comment simulated", "Analysis completed locally. Configure GitHub App credentials to post comments/checks to GitHub.");
+    var publishing = await PersistScanResultAsync(project, repositoryRecord, scan.Id, result, request, gitHubReporter, scanStore, context.RequestAborted);
+    var auditType = publishing.IsSimulated
+        ? "GitHub PR comment simulated"
+        : publishing.Succeeded ? "GitHub PR report published" : "GitHub PR report publishing failed";
+    var auditMessage = publishing.Succeeded
+        ? $"Report publishing status: {publishing.PublishingStatus}."
+        : $"Report publishing failed after scan persistence: {publishing.ErrorMessage}";
+    store.AddAudit(project.WorkspaceId, project.Id, result.Analysis.Id, auditType, auditMessage);
     return Results.Accepted(value: new
     {
         analysisId = scan.Id,
         result.CheckConclusion,
-        simulatedGitHubComment = true,
-        comment.CommentId,
-        comment.WasCreatedOnLastWrite,
-        comment.UpdateCount
+        mode = options.Mode.ToString(),
+        reportPublishingStatus = publishing.PublishingStatus,
+        simulatedGitHubComment = publishing.IsSimulated,
+        commentId = publishing.CommentId,
+        checkRunId = publishing.CheckRunId,
+        reportUrl = publishing.ReportUrl,
+        error = publishing.ErrorMessage,
+        publishing.WasCreatedOnLastWrite,
+        publishing.UpdateCount
     });
 });
 
@@ -579,13 +607,13 @@ static async Task<SpendGovernor.Infrastructure.Persistence.Repository> EnsureRep
         cancellationToken);
 }
 
-static async Task<GitHubPrCommentState> PersistScanResultAsync(
+static async Task<GitHubReportPublishResult> PersistScanResultAsync(
     Project project,
     SpendGovernor.Infrastructure.Persistence.Repository repository,
     Guid scanId,
     AnalysisResult result,
     AnalysisRequest request,
-    SpendGovernorStore store,
+    IGitHubPullRequestReporter gitHubReporter,
     IScanStore scanStore,
     CancellationToken cancellationToken)
 {
@@ -597,18 +625,47 @@ static async Task<GitHubPrCommentState> PersistScanResultAsync(
     }
 
     var existingCommentId = await scanStore.FindExistingGitHubCommentIdAsync(repository.Id, result.Analysis.PullRequestNumber, cancellationToken);
-    var comment = store.SaveAnalysis(project, result, request, existingCommentId);
-    var commentId = comment.CommentId.ToString(CultureInfo.InvariantCulture);
+    var existingCheckRunId = await scanStore.FindExistingGitHubCheckRunIdAsync(repository.Id, result.Analysis.PullRequestNumber, cancellationToken);
     if (result.Analysis.Status == AnalysisStatus.Failed)
     {
-        await scanStore.MarkFailedAsync(scanId, result.Analysis.ErrorMessage ?? "Scan failed.", commentId, cancellationToken);
+        await scanStore.MarkFailedAsync(scanId, result.Analysis.ErrorMessage ?? "Scan failed.", existingCommentId, cancellationToken);
     }
     else
     {
-        await scanStore.MarkCompletedAsync(scanId, result, commentId, cancellationToken);
+        await scanStore.MarkCompletedAsync(scanId, result, existingCommentId, cancellationToken);
     }
 
-    return comment;
+    GitHubReportPublishResult publishing;
+    try
+    {
+        publishing = await gitHubReporter.PublishAsync(new GitHubReportPublishRequest(
+            project,
+            repository,
+            scanId,
+            result,
+            request,
+            existingCommentId,
+            existingCheckRunId), cancellationToken);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+    {
+        publishing = GitHubReportPublishResult.Failed(
+            existingCommentId,
+            existingCheckRunId,
+            result.DashboardUrl ?? result.Analysis.DashboardUrl,
+            ex.Message);
+    }
+
+    await scanStore.SaveGitHubPublishingResultAsync(
+        scanId,
+        publishing.CommentId,
+        publishing.CheckRunId,
+        publishing.ReportUrl,
+        publishing.PublishingStatus,
+        publishing.ErrorMessage,
+        cancellationToken);
+
+    return publishing;
 }
 
 static string ResourcesCsv(PullRequestScan scan)
@@ -860,6 +917,10 @@ public sealed record AnalysisDetailResponse(
     IReadOnlyList<ScanAssumptionItem> Assumptions,
     IReadOnlyList<PolicyEvaluationItem> PolicyEvaluations,
     string? GitHubCommentId,
+    string? GitHubCheckRunId,
+    string? GitHubReportUrl,
+    string? ReportPublishingStatus,
+    string? ReportPublishingError,
     string? GitHubPullRequestUrl)
 {
     public static AnalysisDetailResponse FromResult(AnalysisResult result)
@@ -876,6 +937,10 @@ public sealed record AnalysisDetailResponse(
             result.ConfigErrors,
             [],
             [],
+            null,
+            null,
+            null,
+            null,
             null,
             result.Analysis.GitHubPullRequestUrl);
     }
@@ -956,6 +1021,10 @@ public sealed record AnalysisDetailResponse(
             scan.ScanAssumptions.Select(ScanAssumptionItem.FromEntity).ToArray(),
             scan.PolicyEvaluations.Select(PolicyEvaluationItem.FromEntity).ToArray(),
             scan.GitHubCommentId,
+            scan.GitHubCheckRunId,
+            scan.GitHubReportUrl,
+            scan.ReportPublishingStatus,
+            scan.ReportPublishingError,
             scan.GitHubPullRequestUrl);
     }
 

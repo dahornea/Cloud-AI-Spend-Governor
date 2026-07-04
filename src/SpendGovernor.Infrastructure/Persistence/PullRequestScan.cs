@@ -43,7 +43,11 @@ public sealed class PullRequestScan
     public string? FailureReason { get; set; }
     public string? DashboardReportUrl { get; set; }
     public string? GitHubCommentId { get; set; }
+    public string? GitHubCheckRunId { get; set; }
+    public string? GitHubReportUrl { get; set; }
     public string? GitHubPullRequestUrl { get; set; }
+    public string ReportPublishingStatus { get; set; } = "Pending";
+    public string? ReportPublishingError { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 
@@ -52,4 +56,3 @@ public sealed class PullRequestScan
     public List<ScanAssumption> ScanAssumptions { get; set; } = [];
     public List<PolicyEvaluation> PolicyEvaluations { get; set; } = [];
 }
-

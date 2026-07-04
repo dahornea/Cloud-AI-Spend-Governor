@@ -277,7 +277,7 @@ public sealed class RecommendationEngine
 
 public static class PrCommentRenderer
 {
-    public const string Marker = "<!-- spendgov-report -->";
+    public const string Marker = "<!-- cloud-ai-spend-governor-report -->";
 
     public static string Render(AnalysisResult result)
     {

@@ -416,18 +416,25 @@ function renderPolicyEvaluations(evaluations) {
 }
 
 function renderGithubMetadata(detail) {
-  if (!detail.gitHubCommentId && !detail.gitHubPullRequestUrl) {
+  if (!detail.gitHubCommentId && !detail.gitHubPullRequestUrl && !detail.gitHubCheckRunId && !detail.reportPublishingStatus) {
     return "";
   }
 
   const pr = detail.gitHubPullRequestUrl
     ? `<a href="${escapeHtml(detail.gitHubPullRequestUrl)}" target="_blank" rel="noreferrer">${escapeHtml(detail.gitHubPullRequestUrl)}</a>`
     : "-";
+  const report = detail.gitHubReportUrl
+    ? `<a href="${escapeHtml(detail.gitHubReportUrl)}" target="_blank" rel="noreferrer">${escapeHtml(detail.gitHubReportUrl)}</a>`
+    : "-";
   return `
     <h3>GitHub</h3>
     <div class="list-panel">
       <div><strong>PR</strong><br>${pr}</div>
+      <div><strong>Report URL</strong><br>${report}</div>
+      <div><strong>Publishing Status</strong><br><span class="pill ${cssToken(detail.reportPublishingStatus || "Pending")}">${escapeHtml(detail.reportPublishingStatus || "Pending")}</span></div>
       <div><strong>Comment ID</strong><br>${escapeHtml(detail.gitHubCommentId || "-")}</div>
+      <div><strong>Check Run ID</strong><br>${escapeHtml(detail.gitHubCheckRunId || "-")}</div>
+      ${detail.reportPublishingError ? `<div><strong>Publishing Error</strong><br>${escapeHtml(detail.reportPublishingError)}</div>` : ""}
     </div>`;
 }
 
