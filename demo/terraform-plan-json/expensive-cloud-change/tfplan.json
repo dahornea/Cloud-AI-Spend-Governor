@@ -1,0 +1,80 @@
+{
+  "format_version": "1.2",
+  "resource_changes": [
+    {
+      "address": "azurerm_redis_cache.main",
+      "mode": "managed",
+      "type": "azurerm_redis_cache",
+      "name": "main",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "redis-dev",
+          "location": "westeurope",
+          "sku_name": "Premium",
+          "family": "P",
+          "capacity": 1,
+          "tags": {
+            "environment": "dev"
+          }
+        }
+      }
+    },
+    {
+      "address": "azurerm_service_plan.api",
+      "mode": "managed",
+      "type": "azurerm_service_plan",
+      "name": "api",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "api-dev-plan",
+          "location": "westeurope",
+          "os_type": "Linux",
+          "sku_name": "P1v3",
+          "tags": {
+            "environment": "dev"
+          }
+        }
+      }
+    },
+    {
+      "address": "azurerm_kubernetes_cluster.aks",
+      "mode": "managed",
+      "type": "azurerm_kubernetes_cluster",
+      "name": "aks",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "name": "aks-dev",
+          "location": "westeurope",
+          "default_node_pool": {
+            "name": "system",
+            "vm_size": "Standard_B2s",
+            "node_count": 1
+          },
+          "tags": {
+            "environment": "dev"
+          }
+        },
+        "after": {
+          "name": "aks-dev",
+          "location": "westeurope",
+          "default_node_pool": {
+            "name": "system",
+            "vm_size": "Standard_B2s",
+            "node_count": 4
+          },
+          "tags": {
+            "environment": "dev"
+          }
+        }
+      }
+    }
+  ]
+}

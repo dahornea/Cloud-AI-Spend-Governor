@@ -1,0 +1,61 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {},
+  "variables": {},
+  "resources": [
+    {
+      "type": "Microsoft.Cache/Redis",
+      "apiVersion": "2023-08-01",
+      "name": "redis-prod-demo",
+      "location": "westeurope",
+      "sku": {
+        "name": "Premium",
+        "family": "P",
+        "capacity": 1
+      },
+      "tags": {
+        "environment": "staging"
+      },
+      "properties": {
+        "enableNonSslPort": false,
+        "minimumTlsVersion": "1.2"
+      }
+    },
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2022-03-01",
+      "name": "expensive-api-plan",
+      "location": "westeurope",
+      "sku": {
+        "name": "P1v3",
+        "tier": "PremiumV3",
+        "capacity": 1
+      },
+      "kind": "linux",
+      "tags": {
+        "environment": "staging"
+      },
+      "properties": {
+        "reserved": true
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2022-10-01",
+      "name": "expensive-demo-logs",
+      "location": "westeurope",
+      "sku": {
+        "name": "PerGB2018"
+      },
+      "tags": {
+        "environment": "staging"
+      },
+      "properties": {
+        "retentionInDays": 30,
+        "estimatedIngestionGbPerMonth": 50
+      }
+    }
+  ],
+  "outputs": {}
+}

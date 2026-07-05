@@ -1,0 +1,33 @@
+{
+  "format_version": "1.2",
+  "resource_changes": [
+    {
+      "address": "azurerm_service_plan.api",
+      "mode": "managed",
+      "type": "azurerm_service_plan",
+      "name": "api",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "name": "api-dev-plan",
+          "location": "westeurope",
+          "os_type": "Linux",
+          "sku_name": "B1",
+          "tags": {
+            "environment": "dev"
+          }
+        },
+        "after": {
+          "name": "api-dev-plan",
+          "location": "westeurope",
+          "os_type": "Linux",
+          "sku_name": "P1v3",
+          "tags": {
+            "environment": "dev"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -5,8 +5,7 @@ namespace SpendGovernor.Core;
 public enum WorkspaceRole
 {
     Owner,
-    Member,
-    Viewer
+    Member
 }
 
 public enum AnalysisStatus
@@ -64,7 +63,9 @@ public enum ConfidenceLevel
 public enum RelevantFileKind
 {
     Terraform,
+    TerraformPlanJson,
     TerraformVars,
+    ArmTemplateJson,
     Bicep,
     BicepParam,
     SpendGovConfig,
@@ -131,6 +132,7 @@ public sealed class PullRequestAnalysis
     public decimal? ProposedMonthlyCost { get; set; }
     public decimal? MonthlyDelta { get; set; }
     public decimal? BudgetLimitMonthly { get; set; }
+    public string? BudgetSource { get; set; }
     public string Currency { get; set; } = "EUR";
     public int UnknownResourceCount { get; set; }
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
@@ -176,6 +178,41 @@ public sealed class CloudResourceEstimateInput
     public string? Region { get; set; }
     public string? Sku { get; set; }
     public string? Tier { get; set; }
+    public string? AnalysisSource { get; set; }
+    public string? ArmResourceType { get; set; }
+    public string? ArmApiVersion { get; set; }
+    public string? ArmKind { get; set; }
+    public string? MappedResourceType { get; set; }
+    public string? TerraformAddress { get; set; }
+    public string? TerraformActions { get; set; }
+    public string? TerraformChangeType { get; set; }
+    public string? BeforeSummary { get; set; }
+    public string? AfterSummary { get; set; }
+    public string? PricingCatalogName { get; set; }
+    public string? PricingCatalogVersion { get; set; }
+    public string? PricingSource { get; set; }
+    public string? PricingSourceType { get; set; }
+    public string? PricingMatchType { get; set; }
+    public string? PricingFallbackReason { get; set; }
+    public string? PricingUnit { get; set; }
+    public decimal? PricingUnitPrice { get; set; }
+    public string? PricingMatchedKey { get; set; }
+    public string? PricingConfidenceImpact { get; set; }
+    public bool PricingLiveApiUsed { get; set; }
+    public bool PricingFallbackUsed { get; set; }
+    public bool PricingRegionDefaulted { get; set; }
+    public bool PricingAmbiguousMatch { get; set; }
+    public int? PricingMonthlyHours { get; set; }
+    public string? PricingUnitOfMeasure { get; set; }
+    public string? PricingMeterId { get; set; }
+    public string? PricingMeterName { get; set; }
+    public string? PricingProductName { get; set; }
+    public string? PricingSkuName { get; set; }
+    public string? PricingArmSkuName { get; set; }
+    public string? PricingServiceName { get; set; }
+    public string? PricingServiceFamily { get; set; }
+    public string? PricingPriceType { get; set; }
+    public DateTimeOffset? PricingEffectiveStartDate { get; set; }
     public decimal? Capacity { get; set; }
     public int Quantity { get; set; } = 1;
     public int HoursPerMonth { get; set; } = 730;
@@ -198,6 +235,41 @@ public sealed class ResourceEstimate
     public string? Region { get; set; }
     public string? Sku { get; set; }
     public string? Tier { get; set; }
+    public string? AnalysisSource { get; set; }
+    public string? ArmResourceType { get; set; }
+    public string? ArmApiVersion { get; set; }
+    public string? ArmKind { get; set; }
+    public string? MappedResourceType { get; set; }
+    public string? TerraformAddress { get; set; }
+    public string? TerraformActions { get; set; }
+    public string? TerraformChangeType { get; set; }
+    public string? BeforeSummary { get; set; }
+    public string? AfterSummary { get; set; }
+    public string? PricingCatalogName { get; set; }
+    public string? PricingCatalogVersion { get; set; }
+    public string? PricingSource { get; set; }
+    public string? PricingSourceType { get; set; }
+    public string? PricingMatchType { get; set; }
+    public string? PricingFallbackReason { get; set; }
+    public string? PricingUnit { get; set; }
+    public decimal? PricingUnitPrice { get; set; }
+    public string? PricingMatchedKey { get; set; }
+    public string? PricingConfidenceImpact { get; set; }
+    public bool PricingLiveApiUsed { get; set; }
+    public bool PricingFallbackUsed { get; set; }
+    public bool PricingRegionDefaulted { get; set; }
+    public bool PricingAmbiguousMatch { get; set; }
+    public int? PricingMonthlyHours { get; set; }
+    public string? PricingUnitOfMeasure { get; set; }
+    public string? PricingMeterId { get; set; }
+    public string? PricingMeterName { get; set; }
+    public string? PricingProductName { get; set; }
+    public string? PricingSkuName { get; set; }
+    public string? PricingArmSkuName { get; set; }
+    public string? PricingServiceName { get; set; }
+    public string? PricingServiceFamily { get; set; }
+    public string? PricingPriceType { get; set; }
+    public DateTimeOffset? PricingEffectiveStartDate { get; set; }
     public string? Environment { get; set; }
     public CostCategory Category { get; set; } = CostCategory.Unknown;
     public decimal? MonthlyCost { get; set; }
@@ -221,6 +293,15 @@ public sealed class ResourceCostChange
     public string? Region { get; set; }
     public string? BeforeSku { get; set; }
     public string? AfterSku { get; set; }
+    public string? BeforeSummary { get; set; }
+    public string? AfterSummary { get; set; }
+    public string? TerraformAddress { get; set; }
+    public string? TerraformActions { get; set; }
+    public string? Reason { get; set; }
+    public string? PricingCatalogVersion { get; set; }
+    public string? PricingSource { get; set; }
+    public string? PricingMatchType { get; set; }
+    public string? PricingFallbackReason { get; set; }
     public decimal MonthlyDelta { get; set; }
     public string ChangeKind { get; set; } = "changed";
 }

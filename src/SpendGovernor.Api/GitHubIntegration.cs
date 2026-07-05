@@ -23,7 +23,7 @@ public sealed class GitHubIntegrationOptions
     public string AppId { get; set; } = "";
     public string PrivateKeyPath { get; set; } = "";
     public string PrivateKey { get; set; } = "";
-    public string WebhookSecret { get; set; } = "dev-secret";
+    public string WebhookSecret { get; set; } = "";
     public bool EnableCheckRuns { get; set; } = true;
     public string BotCommentMarker { get; set; } = PrCommentRenderer.Marker;
     public bool AllowUnsignedWebhooksInDevelopment { get; set; }

@@ -3,6 +3,8 @@ namespace SpendGovernor.Infrastructure.Persistence;
 public sealed class Repository
 {
     public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid ProjectId { get; set; }
+    public ProjectEntity? Project { get; set; }
     public string Provider { get; set; } = "github";
     public string Owner { get; set; } = "";
     public string Name { get; set; } = "";
@@ -15,4 +17,3 @@ public sealed class Repository
 
     public List<PullRequestScan> PullRequestScans { get; set; } = [];
 }
-

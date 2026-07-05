@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -10,18 +12,31 @@ using SpendGovernor.Infrastructure.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Logging.ClearProviders();
+builder.Logging.AddSimpleConsole(options =>
+{
+    options.IncludeScopes = true;
+    options.SingleLine = true;
+    options.TimestampFormat = "yyyy-MM-dd HH:mm:ss ";
+});
+
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
     options.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
 });
-builder.Services.AddSingleton<IPricingAdapter, SeededAzurePricingAdapter>();
-builder.Services.AddSingleton<AiModelPriceCatalog>();
+builder.Services.Configure<AzureRetailPricesOptions>(builder.Configuration.GetSection("Pricing:AzureRetailPrices"));
+builder.Services.AddHttpClient();
+builder.Services.AddSingleton(_ => JsonPricingCatalogService.LoadDefault(validate: true));
+builder.Services.AddSingleton<IAzureRetailPricesClient>(services => new AzureRetailPricesClient(
+    services.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(AzureRetailPricesClient)),
+    services.GetRequiredService<IOptions<AzureRetailPricesOptions>>()));
+builder.Services.AddSingleton<IAzureLivePricingProvider, AzureLivePricingProvider>();
+builder.Services.AddSingleton<IPricingCatalogService, HybridPricingCatalogService>();
 builder.Services.AddSingleton<MonthlyCostEstimator>();
 builder.Services.AddSingleton<AnalysisEngine>();
-builder.Services.AddSingleton<SpendGovernorStore>();
+builder.Services.AddScoped<SpendGovernorStore>();
 builder.Services.Configure<GitHubIntegrationOptions>(builder.Configuration.GetSection("GitHub"));
-builder.Services.AddHttpClient();
 builder.Services.AddSingleton<IGitHubApiClient, GitHubApiClient>();
 builder.Services.AddScoped<IGitHubPullRequestReporter>(services => GitHubReporterFactory.Create(services));
 builder.Services.AddDbContext<SpendGovernorDbContext>(options =>
@@ -30,11 +45,87 @@ builder.Services.AddDbContext<SpendGovernorDbContext>(options =>
 builder.Services.AddScoped<IRepositoryStore, RepositoryStore>();
 builder.Services.AddScoped<IScanResultWriter, ScanResultWriter>();
 builder.Services.AddScoped<IScanStore, ScanStore>();
+builder.Services.AddScoped<ScanExecutionService>();
+builder.Services.AddSingleton<IScanJobQueue, ChannelScanJobQueue>();
+builder.Services.AddHostedService<QueuedScanWorker>();
+builder.Services.AddHealthChecks()
+    .AddCheck("self", () => HealthCheckResult.Healthy("API process is running."))
+    .AddCheck<DatabaseHealthCheck>("database");
 
 var app = builder.Build();
 
+app.Use(async (context, next) =>
+{
+    var correlationId = ResolveCorrelationId(context);
+    context.Items["CorrelationId"] = correlationId;
+    context.Response.Headers["X-Correlation-ID"] = correlationId;
+
+    using (app.Logger.BeginScope(new Dictionary<string, object?>
+    {
+        ["CorrelationId"] = correlationId
+    }))
+    {
+        await next();
+    }
+});
+
+app.Use(async (context, next) =>
+{
+    try
+    {
+        await next();
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException || !context.RequestAborted.IsCancellationRequested)
+    {
+        app.Logger.LogError(ex, "Unhandled request failure for {Method} {Path}.", context.Request.Method, context.Request.Path);
+        if (!context.Response.HasStarted)
+        {
+            context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+            await Results.Problem(
+                title: "Unexpected server error",
+                detail: "The request failed. Use the correlation id when checking logs.",
+                statusCode: StatusCodes.Status500InternalServerError,
+                extensions: new Dictionary<string, object?>
+                {
+                    ["correlationId"] = ResolveCorrelationId(context)
+                }).ExecuteAsync(context);
+        }
+    }
+});
+
 app.UseDefaultFiles();
 app.UseStaticFiles();
+app.MapHealthChecks("/health");
+
+app.MapPost("/api/auth/register", (AuthRegisterRequest request, HttpContext context, SpendGovernorStore store) =>
+{
+    var result = store.RegisterUser(request.Email, request.Password, request.DisplayName);
+    if (result.User is null)
+    {
+        return Results.BadRequest(new { error = result.Error });
+    }
+
+    SetAuthCookie(context, result.User.Id);
+    return Results.Ok(new AuthResponse(result.User, store.GetWorkspaces(result.User.Id)));
+});
+
+app.MapPost("/api/auth/login", (AuthLoginRequest request, HttpContext context, SpendGovernorStore store) =>
+{
+    var result = store.LoginUser(request.Email, request.Password);
+    if (result.User is null)
+    {
+        return Results.BadRequest(new { error = result.Error });
+    }
+
+    SetAuthCookie(context, result.User.Id);
+    return Results.Ok(new AuthResponse(result.User, store.GetWorkspaces(result.User.Id)));
+});
+
+app.MapPost("/api/auth/logout", (HttpContext context) =>
+{
+    context.Response.Cookies.Delete(LocalAuth.CookieName);
+    return Results.Ok(new { loggedOut = true });
+});
 
 app.MapGet("/api/me", (HttpContext context, SpendGovernorStore store) =>
 {
@@ -72,7 +163,7 @@ app.MapPost("/api/projects", async (CreateProjectRequest request, HttpContext co
     }
 
     var project = store.CreateProject(request);
-    await repositoryStore.FindOrCreateAsync("github", project.RepositoryOwner, project.RepositoryName, "main", null, project.GitHubInstallationId, context.RequestAborted);
+    await repositoryStore.FindOrCreateAsync(project.Id, "github", project.RepositoryOwner, project.RepositoryName, "main", null, project.GitHubInstallationId, context.RequestAborted);
     return Results.Created($"/api/projects/{project.Id}", project);
 });
 
@@ -93,11 +184,11 @@ app.MapGet("/api/projects/{projectId:guid}", async (Guid projectId, HttpContext 
         return Results.NotFound();
     }
 
-    var repository = await repositoryStore.FindByProviderAndFullNameAsync("github", $"{project.RepositoryOwner}/{project.RepositoryName}", context.RequestAborted);
+    var repository = await repositoryStore.FindByProjectIdAsync(project.Id, context.RequestAborted);
     var metrics = repository is null
         ? ProjectMetrics.Empty
         : ProjectMetrics.FromScans(await scanStore.GetLatestScansForRepositoryAsync(repository.Id, 5, context.RequestAborted), project.Currency);
-    return Results.Ok(new ProjectDetailResponse(project, metrics));
+    return Results.Ok(new ProjectDetailResponse(project, metrics, store.GetRepositories(project.Id)));
 });
 
 app.MapPatch("/api/projects/{projectId:guid}/settings", (Guid projectId, PatchProjectSettingsRequest request, HttpContext context, SpendGovernorStore store) =>
@@ -115,7 +206,7 @@ app.MapPatch("/api/projects/{projectId:guid}/settings", (Guid projectId, PatchPr
     }
 
     store.UpdateProject(projectId, request);
-    return Results.Ok(project);
+    return Results.Ok(store.GetProject(projectId));
 });
 
 app.MapGet("/api/projects/{projectId:guid}/analyses", async (Guid projectId, HttpContext context, SpendGovernorStore store, IRepositoryStore repositoryStore, IScanStore scanStore) =>
@@ -127,7 +218,7 @@ app.MapGet("/api/projects/{projectId:guid}/analyses", async (Guid projectId, Htt
         return Results.NotFound();
     }
 
-    var repository = await repositoryStore.FindByProviderAndFullNameAsync("github", $"{project.RepositoryOwner}/{project.RepositoryName}", context.RequestAborted);
+    var repository = await repositoryStore.FindByProjectIdAsync(project.Id, context.RequestAborted);
     if (repository is null)
     {
         return Results.Ok(Array.Empty<AnalysisListItem>());
@@ -137,7 +228,7 @@ app.MapGet("/api/projects/{projectId:guid}/analyses", async (Guid projectId, Htt
     return Results.Ok(scans.Select(AnalysisListItem.FromScan));
 });
 
-app.MapPost("/api/projects/{projectId:guid}/analyses", async (Guid projectId, RunAnalysisRequest request, HttpContext context, SpendGovernorStore store, AnalysisEngine engine, IRepositoryStore repositoryStore, IScanStore scanStore, IGitHubPullRequestReporter gitHubReporter) =>
+app.MapPost("/api/projects/{projectId:guid}/analyses", async (Guid projectId, RunAnalysisRequest request, HttpContext context, SpendGovernorStore store, IRepositoryStore repositoryStore, IScanStore scanStore, ScanExecutionService scanExecution) =>
 {
     var user = CurrentUser(context, store);
     var project = store.GetProjectForUser(projectId, user.Id);
@@ -149,14 +240,12 @@ app.MapPost("/api/projects/{projectId:guid}/analyses", async (Guid projectId, Ru
     var analysisRequest = request.ToAnalysisRequest(project, DashboardBaseUrl(context));
     var repository = await EnsureRepositoryAsync(project, repositoryStore, context.RequestAborted);
     var scan = await scanStore.CreateScanAsync(repository, analysisRequest, context.RequestAborted);
-    await scanStore.MarkRunningAsync(scan.Id, DateTimeOffset.UtcNow, context.RequestAborted);
-    var result = engine.Analyze(analysisRequest);
-    await PersistScanResultAsync(project, repository, scan.Id, result, analysisRequest, gitHubReporter, scanStore, context.RequestAborted);
+    await scanExecution.ExecuteAsync(project, repository, scan.Id, analysisRequest, context.RequestAborted);
     var persisted = await scanStore.GetScanDetailsAsync(scan.Id, context.RequestAborted);
     return Results.Created($"/api/analyses/{scan.Id}", AnalysisDetailResponse.FromScan(persisted!));
 });
 
-app.MapPost("/api/demo/projects/{projectId:guid}/analyze", async (Guid projectId, DemoRunRequest request, HttpContext context, SpendGovernorStore store, AnalysisEngine engine, IRepositoryStore repositoryStore, IScanStore scanStore, IGitHubPullRequestReporter gitHubReporter) =>
+app.MapPost("/api/demo/projects/{projectId:guid}/analyze", async (Guid projectId, DemoRunRequest request, HttpContext context, SpendGovernorStore store, IRepositoryStore repositoryStore, IScanStore scanStore, ScanExecutionService scanExecution) =>
 {
     var user = CurrentUser(context, store);
     var project = store.GetProjectForUser(projectId, user.Id);
@@ -168,9 +257,7 @@ app.MapPost("/api/demo/projects/{projectId:guid}/analyze", async (Guid projectId
     var analysisRequest = DemoScenarios.Create(project, request.Scenario, DashboardBaseUrl(context));
     var repository = await EnsureRepositoryAsync(project, repositoryStore, context.RequestAborted);
     var scan = await scanStore.CreateScanAsync(repository, analysisRequest, context.RequestAborted);
-    await scanStore.MarkRunningAsync(scan.Id, DateTimeOffset.UtcNow, context.RequestAborted);
-    var result = engine.Analyze(analysisRequest);
-    await PersistScanResultAsync(project, repository, scan.Id, result, analysisRequest, gitHubReporter, scanStore, context.RequestAborted);
+    await scanExecution.ExecuteAsync(project, repository, scan.Id, analysisRequest, context.RequestAborted);
     var persisted = await scanStore.GetScanDetailsAsync(scan.Id, context.RequestAborted);
     return Results.Created($"/api/analyses/{scan.Id}", AnalysisDetailResponse.FromScan(persisted!));
 });
@@ -183,10 +270,9 @@ if (app.Environment.IsDevelopment())
     app.MapPost("/api/dev/demo/seed", async (
         HttpContext context,
         SpendGovernorStore store,
-        AnalysisEngine engine,
         IRepositoryStore repositoryStore,
         IScanStore scanStore,
-        IGitHubPullRequestReporter gitHubReporter,
+        ScanExecutionService scanExecution,
         SpendGovernorDbContext dbContext) =>
     {
         var user = CurrentUser(context, store);
@@ -199,9 +285,7 @@ if (app.Environment.IsDevelopment())
         {
             var request = DemoScenarios.Create(project, scenario, DashboardBaseUrl(context));
             var scan = await scanStore.CreateScanAsync(repository, request, context.RequestAborted);
-            await scanStore.MarkRunningAsync(scan.Id, DateTimeOffset.UtcNow, context.RequestAborted);
-            var result = engine.Analyze(request);
-            await PersistScanResultAsync(project, repository, scan.Id, result, request, gitHubReporter, scanStore, context.RequestAborted);
+            await scanExecution.ExecuteAsync(project, repository, scan.Id, request, context.RequestAborted);
             var persisted = await scanStore.GetScanDetailsAsync(scan.Id, context.RequestAborted);
             if (persisted is not null)
             {
@@ -224,7 +308,7 @@ app.MapGet("/api/analyses/{analysisId:guid}", async (Guid analysisId, HttpContex
 {
     var user = CurrentUser(context, store);
     var scan = await scanStore.GetScanDetailsAsync(analysisId, context.RequestAborted);
-    if (scan?.Repository is null || store.GetProjectForRepositoryForUser(scan.Repository.Owner, scan.Repository.Name, user.Id) is null)
+    if (scan?.Repository is null || store.GetProjectForUser(scan.Repository.ProjectId, user.Id) is null)
     {
         return Results.NotFound();
     }
@@ -232,7 +316,7 @@ app.MapGet("/api/analyses/{analysisId:guid}", async (Guid analysisId, HttpContex
     return Results.Ok(AnalysisDetailResponse.FromScan(scan));
 });
 
-app.MapPost("/api/analyses/{analysisId:guid}/rerun", async (Guid analysisId, HttpContext context, SpendGovernorStore store, AnalysisEngine engine, IRepositoryStore repositoryStore, IScanStore scanStore, IGitHubPullRequestReporter gitHubReporter) =>
+app.MapPost("/api/analyses/{analysisId:guid}/rerun", async (Guid analysisId, HttpContext context, SpendGovernorStore store, IRepositoryStore repositoryStore, IScanStore scanStore, ScanExecutionService scanExecution) =>
 {
     var user = CurrentUser(context, store);
     var original = store.GetAnalysisForUser(analysisId, user.Id);
@@ -253,11 +337,10 @@ app.MapPost("/api/analyses/{analysisId:guid}/rerun", async (Guid analysisId, Htt
         return Results.NotFound();
     }
 
-    var rerun = engine.Analyze(request with { CommitSha = request.CommitSha + "-rerun" });
+    var rerunRequest = request with { CommitSha = request.CommitSha + "-rerun" };
     var repository = await EnsureRepositoryAsync(project, repositoryStore, context.RequestAborted);
-    var scan = await scanStore.CreateScanAsync(repository, request, context.RequestAborted);
-    await scanStore.MarkRunningAsync(scan.Id, DateTimeOffset.UtcNow, context.RequestAborted);
-    await PersistScanResultAsync(project, repository, scan.Id, rerun, request, gitHubReporter, scanStore, context.RequestAborted);
+    var scan = await scanStore.CreateScanAsync(repository, rerunRequest, context.RequestAborted);
+    await scanExecution.ExecuteAsync(project, repository, scan.Id, rerunRequest, context.RequestAborted);
     var persisted = await scanStore.GetScanDetailsAsync(scan.Id, context.RequestAborted);
     return Results.Created($"/api/analyses/{scan.Id}", AnalysisDetailResponse.FromScan(persisted!));
 });
@@ -272,7 +355,7 @@ app.MapGet("/api/analyses/{analysisId:guid}/export/resources.csv", async (Guid a
 {
     var user = CurrentUser(context, store);
     var scan = await scanStore.GetScanDetailsAsync(analysisId, context.RequestAborted);
-    if (scan?.Repository is null || store.GetProjectForRepositoryForUser(scan.Repository.Owner, scan.Repository.Name, user.Id) is null)
+    if (scan?.Repository is null || store.GetProjectForUser(scan.Repository.ProjectId, user.Id) is null)
     {
         return Results.NotFound();
     }
@@ -284,7 +367,7 @@ app.MapGet("/api/analyses/{analysisId:guid}/export/policy-findings.csv", async (
 {
     var user = CurrentUser(context, store);
     var scan = await scanStore.GetScanDetailsAsync(analysisId, context.RequestAborted);
-    if (scan?.Repository is null || store.GetProjectForRepositoryForUser(scan.Repository.Owner, scan.Repository.Name, user.Id) is null)
+    if (scan?.Repository is null || store.GetProjectForUser(scan.Repository.ProjectId, user.Id) is null)
     {
         return Results.NotFound();
     }
@@ -296,7 +379,7 @@ app.MapGet("/api/analyses/{analysisId:guid}/export/recommendations.csv", async (
 {
     var user = CurrentUser(context, store);
     var scan = await scanStore.GetScanDetailsAsync(analysisId, context.RequestAborted);
-    if (scan?.Repository is null || store.GetProjectForRepositoryForUser(scan.Repository.Owner, scan.Repository.Name, user.Id) is null)
+    if (scan?.Repository is null || store.GetProjectForUser(scan.Repository.ProjectId, user.Id) is null)
     {
         return Results.NotFound();
     }
@@ -313,7 +396,7 @@ app.MapGet("/api/projects/{projectId:guid}/export/summary.csv", async (Guid proj
         return Results.NotFound();
     }
 
-    var repository = await repositoryStore.FindByProviderAndFullNameAsync("github", $"{project.RepositoryOwner}/{project.RepositoryName}", context.RequestAborted);
+    var repository = await repositoryStore.FindByProjectIdAsync(project.Id, context.RequestAborted);
     if (repository is null)
     {
         return Results.Text("analysisId,repository,pr,branch,environment,status,decision,monthlyDelta,currency,confidence,createdAt,completedAt,failureReason\r\n", "text/csv");
@@ -346,9 +429,34 @@ app.MapPut("/api/projects/{projectId:guid}/policies", (Guid projectId, PolicyUpd
         return Results.Forbid();
     }
 
-    project.PolicyYaml = request.Yaml;
-    store.AddAudit(project.WorkspaceId, project.Id, null, "Config changed", ".spendgov.yml policy settings were updated from the dashboard.");
-    return Results.Ok(new PolicyResponse(project.PolicyYaml, SpendGovConfigParser.Parse(project.PolicyYaml, ProjectSettings.FromProject(project))));
+    return Results.Ok(store.UpdateProjectPolicy(projectId, request.Yaml));
+});
+
+app.MapGet("/api/projects/{projectId:guid}/budgets", (Guid projectId, HttpContext context, SpendGovernorStore store) =>
+{
+    var user = CurrentUser(context, store);
+    var project = store.GetProjectForUser(projectId, user.Id);
+    return project is null
+        ? Results.NotFound()
+        : Results.Ok(store.GetBudgets(projectId));
+});
+
+app.MapPut("/api/projects/{projectId:guid}/budgets/{environment}", (Guid projectId, string environment, EnvironmentBudgetUpdateRequest request, HttpContext context, SpendGovernorStore store) =>
+{
+    var user = CurrentUser(context, store);
+    var project = store.GetProjectForUser(projectId, user.Id);
+    if (project is null)
+    {
+        return Results.NotFound();
+    }
+
+    if (!store.CanEditWorkspace(user.Id, project.WorkspaceId))
+    {
+        return Results.Forbid();
+    }
+
+    var saved = store.UpsertBudget(projectId, request with { Environment = environment });
+    return Results.Ok(saved);
 });
 
 app.MapPost("/api/analyses/{analysisId:guid}/approve", (Guid analysisId, ApprovalRequest request, HttpContext context, SpendGovernorStore store) =>
@@ -408,6 +516,7 @@ app.MapGet("/api/github/installations/callback", (HttpContext context, SpendGove
     }
 
     project.GitHubInstallationId = installationId;
+    store.UpdateGitHubInstallation(project.Id, installationId);
     store.AddAudit(project.WorkspaceId, project.Id, null, "GitHub App installed", $"Installation {installationId} linked to {project.RepositoryOwner}/{project.RepositoryName}.");
     return Results.Ok(new { project.Id, project.GitHubInstallationId });
 });
@@ -415,10 +524,9 @@ app.MapGet("/api/github/installations/callback", (HttpContext context, SpendGove
 app.MapPost("/api/github/webhooks", async (
     HttpContext context,
     SpendGovernorStore store,
-    AnalysisEngine engine,
     IRepositoryStore repositoryStore,
     IScanStore scanStore,
-    IGitHubPullRequestReporter gitHubReporter,
+    IScanJobQueue scanQueue,
     IOptions<GitHubIntegrationOptions> gitHubOptions,
     IWebHostEnvironment environment) =>
 {
@@ -429,12 +537,31 @@ app.MapPost("/api/github/webhooks", async (
     var isUnsignedDevelopmentWebhook = environment.IsDevelopment()
         && options.AllowUnsignedWebhooksInDevelopment
         && string.IsNullOrWhiteSpace(signature);
+    if (!isUnsignedDevelopmentWebhook && string.IsNullOrWhiteSpace(options.WebhookSecret))
+    {
+        return Results.Problem(
+            title: "GitHub webhook secret is not configured",
+            detail: "Set GitHub__WebhookSecret before accepting signed webhook deliveries.",
+            statusCode: StatusCodes.Status500InternalServerError);
+    }
+
     if (!isUnsignedDevelopmentWebhook && !GitHubSignatureVerifier.VerifySha256(payload, signature, options.WebhookSecret))
     {
         return Results.Unauthorized();
     }
 
-    using var document = JsonDocument.Parse(payload);
+    JsonDocument document;
+    try
+    {
+        document = JsonDocument.Parse(payload);
+    }
+    catch (JsonException)
+    {
+        return Results.BadRequest(new { error = "Invalid GitHub webhook JSON payload." });
+    }
+
+    using (document)
+    {
     var root = document.RootElement;
     var action = root.TryGetProperty("action", out var actionElement) ? actionElement.GetString() : "";
     if (action is not ("opened" or "synchronize" or "reopened" or "ready_for_review"))
@@ -473,32 +600,21 @@ app.MapPost("/api/github/webhooks", async (
         Settings = ProjectSettings.FromProject(project),
         DashboardBaseUrl = DashboardBaseUrl(context)
     };
-    var repositoryRecord = await repositoryStore.FindOrCreateAsync("github", owner, repoName, request.BaseBranch, repository.TryGetProperty("id", out var repoId) ? repoId.GetRawText().Trim('"') : null, installationId, context.RequestAborted);
+    var repositoryRecord = await repositoryStore.FindOrCreateAsync(project.Id, "github", owner, repoName, request.BaseBranch, repository.TryGetProperty("id", out var repoId) ? repoId.GetRawText().Trim('"') : null, installationId, context.RequestAborted);
     var scan = await scanStore.CreateScanAsync(repositoryRecord, request, context.RequestAborted);
-    await scanStore.MarkRunningAsync(scan.Id, DateTimeOffset.UtcNow, context.RequestAborted);
-    var result = engine.Analyze(request);
-    var publishing = await PersistScanResultAsync(project, repositoryRecord, scan.Id, result, request, gitHubReporter, scanStore, context.RequestAborted);
-    var auditType = publishing.IsSimulated
-        ? "GitHub PR comment simulated"
-        : publishing.Succeeded ? "GitHub PR report published" : "GitHub PR report publishing failed";
-    var auditMessage = publishing.Succeeded
-        ? $"Report publishing status: {publishing.PublishingStatus}."
-        : $"Report publishing failed after scan persistence: {publishing.ErrorMessage}";
-    store.AddAudit(project.WorkspaceId, project.Id, result.Analysis.Id, auditType, auditMessage);
+    await scanQueue.QueueAsync(new QueuedScanJob(scan.Id, project.Id, repositoryRecord.Id, request, ResolveCorrelationId(context)), context.RequestAborted);
+    store.AddAudit(project.WorkspaceId, project.Id, scan.Id, "GitHub webhook scan queued", $"Queued PR #{request.PullRequestNumber} scan for {repositoryRecord.FullName}.");
     return Results.Accepted(value: new
     {
         analysisId = scan.Id,
-        result.CheckConclusion,
+        status = "Queued",
+        checkConclusion = "pending",
         mode = options.Mode.ToString(),
-        reportPublishingStatus = publishing.PublishingStatus,
-        simulatedGitHubComment = publishing.IsSimulated,
-        commentId = publishing.CommentId,
-        checkRunId = publishing.CheckRunId,
-        reportUrl = publishing.ReportUrl,
-        error = publishing.ErrorMessage,
-        publishing.WasCreatedOnLastWrite,
-        publishing.UpdateCount
+        reportPublishingStatus = scan.ReportPublishingStatus,
+        simulatedGitHubComment = options.Mode == GitHubIntegrationMode.Simulated,
+        reportUrl = $"{request.DashboardBaseUrl?.TrimEnd('/')}/?analysisId={scan.Id}"
     });
+    }
 });
 
 app.MapFallbackToFile("index.html");
@@ -507,6 +623,13 @@ app.Run();
 
 static User CurrentUser(HttpContext context, SpendGovernorStore store)
 {
+    if (context.Request.Cookies.TryGetValue(LocalAuth.CookieName, out var userIdRaw)
+        && Guid.TryParse(userIdRaw, out var userId)
+        && store.GetUserById(userId) is { } cookieUser)
+    {
+        return cookieUser;
+    }
+
     var email = context.Request.Headers["X-User-Email"].FirstOrDefault();
     if (string.IsNullOrWhiteSpace(email))
     {
@@ -519,6 +642,37 @@ static User CurrentUser(HttpContext context, SpendGovernorStore store)
 static string DashboardBaseUrl(HttpContext context)
 {
     return $"{context.Request.Scheme}://{context.Request.Host}";
+}
+
+static string ResolveCorrelationId(HttpContext context)
+{
+    if (context.Items.TryGetValue("CorrelationId", out var existing) && existing is string existingId && !string.IsNullOrWhiteSpace(existingId))
+    {
+        return existingId;
+    }
+
+    var requested = context.Request.Headers["X-Correlation-ID"].FirstOrDefault();
+    if (!string.IsNullOrWhiteSpace(requested))
+    {
+        return requested.Length <= 128 ? requested : requested[..128];
+    }
+
+    return Activity.Current?.TraceId.ToString() ?? Guid.NewGuid().ToString("n", CultureInfo.InvariantCulture);
+}
+
+static void SetAuthCookie(HttpContext context, Guid userId)
+{
+    context.Response.Cookies.Append(
+        LocalAuth.CookieName,
+        userId.ToString("D"),
+        new CookieOptions
+        {
+            HttpOnly = true,
+            IsEssential = true,
+            SameSite = SameSiteMode.Lax,
+            Secure = false,
+            Expires = DateTimeOffset.UtcNow.AddDays(30)
+        });
 }
 
 static IReadOnlyList<string> ExtractWebhookChangedFiles(JsonElement root)
@@ -598,6 +752,7 @@ static async Task<DemoResetResponse> ResetDemoDataAsync(SpendGovernorDbContext d
 static async Task<SpendGovernor.Infrastructure.Persistence.Repository> EnsureRepositoryAsync(Project project, IRepositoryStore repositoryStore, CancellationToken cancellationToken)
 {
     return await repositoryStore.FindOrCreateAsync(
+        project.Id,
         "github",
         project.RepositoryOwner,
         project.RepositoryName,
@@ -607,82 +762,28 @@ static async Task<SpendGovernor.Infrastructure.Persistence.Repository> EnsureRep
         cancellationToken);
 }
 
-static async Task<GitHubReportPublishResult> PersistScanResultAsync(
-    Project project,
-    SpendGovernor.Infrastructure.Persistence.Repository repository,
-    Guid scanId,
-    AnalysisResult result,
-    AnalysisRequest request,
-    IGitHubPullRequestReporter gitHubReporter,
-    IScanStore scanStore,
-    CancellationToken cancellationToken)
-{
-    if (!string.IsNullOrWhiteSpace(request.DashboardBaseUrl))
-    {
-        result.DashboardUrl = $"{request.DashboardBaseUrl.TrimEnd('/')}/?analysisId={scanId}";
-        result.Analysis.DashboardUrl = result.DashboardUrl;
-        result.CommentMarkdown = PrCommentRenderer.Render(result);
-    }
-
-    var existingCommentId = await scanStore.FindExistingGitHubCommentIdAsync(repository.Id, result.Analysis.PullRequestNumber, cancellationToken);
-    var existingCheckRunId = await scanStore.FindExistingGitHubCheckRunIdAsync(repository.Id, result.Analysis.PullRequestNumber, cancellationToken);
-    if (result.Analysis.Status == AnalysisStatus.Failed)
-    {
-        await scanStore.MarkFailedAsync(scanId, result.Analysis.ErrorMessage ?? "Scan failed.", existingCommentId, cancellationToken);
-    }
-    else
-    {
-        await scanStore.MarkCompletedAsync(scanId, result, existingCommentId, cancellationToken);
-    }
-
-    GitHubReportPublishResult publishing;
-    try
-    {
-        publishing = await gitHubReporter.PublishAsync(new GitHubReportPublishRequest(
-            project,
-            repository,
-            scanId,
-            result,
-            request,
-            existingCommentId,
-            existingCheckRunId), cancellationToken);
-    }
-    catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
-    {
-        publishing = GitHubReportPublishResult.Failed(
-            existingCommentId,
-            existingCheckRunId,
-            result.DashboardUrl ?? result.Analysis.DashboardUrl,
-            ex.Message);
-    }
-
-    await scanStore.SaveGitHubPublishingResultAsync(
-        scanId,
-        publishing.CommentId,
-        publishing.CheckRunId,
-        publishing.ReportUrl,
-        publishing.PublishingStatus,
-        publishing.ErrorMessage,
-        cancellationToken);
-
-    return publishing;
-}
-
 static string ResourcesCsv(PullRequestScan scan)
 {
     var builder = new StringBuilder();
-    builder.AppendLine("scanId,resourceName,resourceType,sourceFile,provider,region,sku,rawJson,createdAt");
+    builder.AppendLine("scanId,resourceName,resourceType,armResourceType,mappedResourceType,armApiVersion,armKind,sourceFile,provider,region,sku,terraformAddress,terraformActions,rawJson,createdAt");
     foreach (var resource in scan.DetectedResources)
     {
+        var metadata = ResourceRawMetadata.Parse(resource.RawJson);
         builder.AppendLine(string.Join(',', new[]
         {
             Csv(scan.Id.ToString()),
             Csv(resource.ResourceName),
             Csv(resource.ResourceType),
+            Csv(metadata.ArmResourceType),
+            Csv(metadata.MappedResourceType),
+            Csv(metadata.ArmApiVersion),
+            Csv(metadata.ArmKind),
             Csv(resource.SourceFile),
             Csv(resource.Provider),
             Csv(resource.Region),
             Csv(resource.Sku),
+            Csv(resource.TerraformAddress),
+            Csv(resource.TerraformActions),
             Csv(resource.RawJson),
             Csv(resource.CreatedAt.ToString("O", CultureInfo.InvariantCulture))
         }));
@@ -745,6 +846,12 @@ static string Csv(string? value)
 
 public sealed record CreateWorkspaceRequest(string Name);
 
+public sealed record AuthRegisterRequest(string Email, string Password, string? DisplayName);
+
+public sealed record AuthLoginRequest(string Email, string Password);
+
+public sealed record AuthResponse(User User, IReadOnlyList<Workspace> Workspaces);
+
 public sealed record CreateProjectRequest(
     Guid WorkspaceId,
     string Name,
@@ -755,6 +862,26 @@ public sealed record CreateProjectRequest(
     int? HoursPerMonth);
 
 public sealed record PatchProjectSettingsRequest(string? DefaultRegion, string? Currency, int? HoursPerMonth, string? PolicyYaml);
+
+public sealed record EnvironmentBudgetItem(
+    Guid Id,
+    Guid ProjectId,
+    string Environment,
+    decimal? MaxMonthlyCost,
+    decimal? MaxMonthlyDelta,
+    string Currency,
+    decimal? RequireApprovalAbove,
+    bool BlockOnBudgetExceeded,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt);
+
+public sealed record EnvironmentBudgetUpdateRequest(
+    string? Environment,
+    decimal? MaxMonthlyCost,
+    decimal? MaxMonthlyDelta,
+    string? Currency,
+    decimal? RequireApprovalAbove,
+    bool? BlockOnBudgetExceeded);
 
 public sealed record RunAnalysisRequest(
     int PullRequestNumber,
@@ -799,7 +926,19 @@ public sealed record PolicyUpdateRequest(string Yaml);
 
 public sealed record ApprovalRequest(string Reason);
 
-public sealed record ProjectDetailResponse(Project Project, ProjectMetrics Metrics);
+public sealed record ProjectDetailResponse(Project Project, ProjectMetrics Metrics, IReadOnlyList<RepositoryListItem> Repositories);
+
+public sealed record RepositoryListItem(
+    Guid Id,
+    Guid ProjectId,
+    string Provider,
+    string Owner,
+    string Name,
+    string FullName,
+    string DefaultBranch,
+    string? ExternalRepositoryId,
+    string? InstallationId,
+    DateTimeOffset? LastScanAt);
 
 public sealed record ProjectMetrics(int TotalPrsAnalyzed, decimal TotalMonthlyDeltaDetected, int WarnedOrBlockedPrs, AnalysisListItem[] LatestAnalyses)
 {
@@ -913,6 +1052,7 @@ public sealed record AnalysisDetailResponse(
     IReadOnlyList<AuditEvent> AuditEvents,
     string CommentMarkdown,
     string CheckConclusion,
+    string AnalysisSource,
     IReadOnlyList<string> ConfigErrors,
     IReadOnlyList<ScanAssumptionItem> Assumptions,
     IReadOnlyList<PolicyEvaluationItem> PolicyEvaluations,
@@ -934,6 +1074,7 @@ public sealed record AnalysisDetailResponse(
             result.AuditEvents,
             result.CommentMarkdown,
             result.CheckConclusion,
+            DetectAnalysisSource(result.ProposedResources),
             result.ConfigErrors,
             [],
             [],
@@ -973,19 +1114,65 @@ public sealed record AnalysisDetailResponse(
             DashboardUrl = scan.DashboardReportUrl
         };
 
-        var resources = scan.DetectedResources.Select(resource => new ResourceEstimate
+        var resources = scan.DetectedResources.Select(resource =>
         {
-            AnalysisId = scan.Id,
-            SourceFile = resource.SourceFile,
-            Provider = resource.Provider,
-            ResourceType = resource.ResourceType,
-            ResourceName = resource.ResourceName,
-            Sku = resource.Sku,
-            Region = resource.Region,
-            Currency = scan.Currency,
-            Status = EstimateStatus.Estimated,
-            Confidence = AnalysisListItem.ToCoreConfidence(scan.ConfidenceLevel),
-            AssumptionsJson = resource.RawJson
+            var metadata = ResourceRawMetadata.Parse(resource.RawJson);
+            return new ResourceEstimate
+            {
+                AnalysisId = scan.Id,
+                SourceFile = resource.SourceFile,
+                Provider = resource.Provider,
+                ResourceType = resource.ResourceType,
+                ResourceName = resource.ResourceName,
+                Sku = resource.Sku,
+                Region = resource.Region,
+                SourceType = metadata.SourceType ?? ResourceSourceType.Terraform,
+                AnalysisSource = metadata.AnalysisSource,
+                ArmResourceType = metadata.ArmResourceType,
+                ArmApiVersion = metadata.ArmApiVersion,
+                ArmKind = metadata.ArmKind,
+                MappedResourceType = metadata.MappedResourceType,
+                TerraformAddress = resource.TerraformAddress ?? metadata.TerraformAddress,
+                TerraformActions = resource.TerraformActions ?? metadata.TerraformActions,
+                TerraformChangeType = metadata.TerraformChangeType,
+                BeforeSummary = metadata.BeforeSummary,
+                AfterSummary = metadata.AfterSummary,
+                PricingCatalogName = metadata.PricingCatalogName,
+                PricingCatalogVersion = metadata.PricingCatalogVersion,
+                PricingSource = metadata.PricingSource,
+                PricingSourceType = metadata.PricingSourceType,
+                PricingMatchType = metadata.PricingMatchType,
+                PricingFallbackReason = metadata.PricingFallbackReason,
+                PricingUnit = metadata.PricingUnit,
+                PricingUnitPrice = metadata.PricingUnitPrice,
+                PricingMatchedKey = metadata.PricingMatchedKey,
+                PricingConfidenceImpact = metadata.PricingConfidenceImpact,
+                PricingLiveApiUsed = metadata.PricingLiveApiUsed,
+                PricingFallbackUsed = metadata.PricingFallbackUsed,
+                PricingRegionDefaulted = metadata.PricingRegionDefaulted,
+                PricingAmbiguousMatch = metadata.PricingAmbiguousMatch,
+                PricingMonthlyHours = metadata.PricingMonthlyHours,
+                PricingUnitOfMeasure = metadata.PricingUnitOfMeasure,
+                PricingMeterId = metadata.PricingMeterId,
+                PricingMeterName = metadata.PricingMeterName,
+                PricingProductName = metadata.PricingProductName,
+                PricingSkuName = metadata.PricingSkuName,
+                PricingArmSkuName = metadata.PricingArmSkuName,
+                PricingServiceName = metadata.PricingServiceName,
+                PricingServiceFamily = metadata.PricingServiceFamily,
+                PricingPriceType = metadata.PricingPriceType,
+                PricingEffectiveStartDate = metadata.PricingEffectiveStartDate,
+                Environment = scan.Environment,
+                Category = metadata.Category ?? CostCategory.Unknown,
+                Currency = scan.Currency,
+                Status = metadata.Status ?? EstimateStatus.Estimated,
+                Confidence = metadata.Confidence ?? AnalysisListItem.ToCoreConfidence(scan.ConfidenceLevel),
+                Quantity = metadata.Quantity ?? 1,
+                HoursPerMonth = metadata.HoursPerMonth ?? 730,
+                MonthlyCost = metadata.MonthlyCost,
+                MonthlyDelta = metadata.MonthlyDelta,
+                AssumptionsJson = resource.RawJson
+            };
         }).ToArray();
 
         var changes = scan.CostBreakdownItems.Select(item => new ResourceCostChange
@@ -994,6 +1181,17 @@ public sealed record AnalysisDetailResponse(
             ResourceName = item.ResourceName,
             ResourceType = item.ResourceType,
             ChangeKind = item.ChangeType.ToString().ToLowerInvariant(),
+            BeforeSku = item.BeforeSummary,
+            AfterSku = item.AfterSummary,
+            BeforeSummary = item.BeforeSummary,
+            AfterSummary = item.AfterSummary,
+            TerraformAddress = item.TerraformAddress,
+            TerraformActions = item.TerraformActions,
+            Reason = item.Reason,
+            PricingCatalogVersion = item.PricingCatalogVersion,
+            PricingSource = item.PricingSource,
+            PricingMatchType = item.PricingMatchType,
+            PricingFallbackReason = item.PricingFallbackReason,
             MonthlyDelta = item.EstimatedMonthlyCost ?? 0
         }).ToArray();
 
@@ -1007,16 +1205,30 @@ public sealed record AnalysisDetailResponse(
                 Message = evaluation.Message
             })
             .ToArray();
+        var recommendations = BuildPersistedRecommendations(scan);
+        var checkConclusion = scan.Decision == PolicyDecision.Fail ? "failure" : scan.Decision == PolicyDecision.Warn ? "neutral" : "success";
+        var persistedResult = new AnalysisResult
+        {
+            Analysis = analysis,
+            ProposedResources = resources,
+            CostChanges = changes,
+            PolicyFindings = policyFindings,
+            Recommendations = recommendations,
+            CheckConclusion = checkConclusion,
+            DashboardUrl = scan.DashboardReportUrl
+        };
+        var commentMarkdown = PrCommentRenderer.Render(persistedResult);
 
         return new AnalysisDetailResponse(
             analysis,
             resources,
             changes,
             policyFindings,
-            BuildPersistedRecommendations(scan),
+            recommendations,
             [],
-            "",
-            scan.Decision == PolicyDecision.Fail ? "failure" : scan.Decision == PolicyDecision.Warn ? "neutral" : "success",
+            commentMarkdown,
+            checkConclusion,
+            DetectAnalysisSource(resources),
             [],
             scan.ScanAssumptions.Select(ScanAssumptionItem.FromEntity).ToArray(),
             scan.PolicyEvaluations.Select(PolicyEvaluationItem.FromEntity).ToArray(),
@@ -1089,6 +1301,36 @@ public sealed record AnalysisDetailResponse(
         return recommendations;
     }
 
+    private static string DetectAnalysisSource(IReadOnlyList<ResourceEstimate> resources)
+    {
+        if (resources.Any(resource => resource.AnalysisSource == TerraformPlanJsonParser.AnalysisSource))
+        {
+            return TerraformPlanJsonParser.AnalysisSource;
+        }
+
+        if (resources.Any(resource => resource.AnalysisSource == ArmTemplateJsonParser.AnalysisSource))
+        {
+            return ArmTemplateJsonParser.AnalysisSource;
+        }
+
+        if (resources.Any(resource => resource.SourceType == ResourceSourceType.Terraform))
+        {
+            return "Terraform .tf parser fallback";
+        }
+
+        if (resources.Any(resource => resource.SourceType == ResourceSourceType.Bicep))
+        {
+            return "Raw Bicep parser fallback";
+        }
+
+        if (resources.All(resource => resource.SourceType == ResourceSourceType.AiConfig))
+        {
+            return "AI spend config";
+        }
+
+        return resources.Count == 0 ? "No cost-relevant files" : "Mixed analyzers";
+    }
+
     private static Recommendation Recommendation(PullRequestScan scan, string severity, string title, string description, decimal? savings) => new()
     {
         AnalysisId = scan.Id,
@@ -1109,4 +1351,233 @@ public sealed record ScanAssumptionItem(string Name, string Value)
 public sealed record PolicyEvaluationItem(string RuleName, PolicyRuleResult Result, string Message)
 {
     public static PolicyEvaluationItem FromEntity(PolicyEvaluation evaluation) => new(evaluation.RuleName, evaluation.Result, evaluation.Message);
+}
+
+public sealed record ResourceRawMetadata(
+    ResourceSourceType? SourceType,
+    string? AnalysisSource,
+    string? ArmResourceType,
+    string? ArmApiVersion,
+    string? ArmKind,
+    string? MappedResourceType,
+    string? TerraformAddress,
+    string? TerraformActions,
+    string? TerraformChangeType,
+    string? BeforeSummary,
+    string? AfterSummary,
+    string? PricingCatalogName,
+    string? PricingCatalogVersion,
+    string? PricingSource,
+    string? PricingSourceType,
+    string? PricingMatchType,
+    string? PricingFallbackReason,
+    string? PricingUnit,
+    decimal? PricingUnitPrice,
+    string? PricingMatchedKey,
+    string? PricingConfidenceImpact,
+    bool PricingLiveApiUsed,
+    bool PricingFallbackUsed,
+    bool PricingRegionDefaulted,
+    bool PricingAmbiguousMatch,
+    int? PricingMonthlyHours,
+    string? PricingUnitOfMeasure,
+    string? PricingMeterId,
+    string? PricingMeterName,
+    string? PricingProductName,
+    string? PricingSkuName,
+    string? PricingArmSkuName,
+    string? PricingServiceName,
+    string? PricingServiceFamily,
+    string? PricingPriceType,
+    DateTimeOffset? PricingEffectiveStartDate,
+    CostCategory? Category,
+    int? Quantity,
+    int? HoursPerMonth,
+    decimal? MonthlyCost,
+    decimal? MonthlyDelta,
+    ConfidenceLevel? Confidence,
+    EstimateStatus? Status)
+{
+    public static ResourceRawMetadata Parse(string? rawJson)
+    {
+        if (string.IsNullOrWhiteSpace(rawJson))
+        {
+            return Empty;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(rawJson);
+            var root = document.RootElement;
+            return new ResourceRawMetadata(
+                GetEnum<ResourceSourceType>(root, "SourceType", "sourceType"),
+                GetString(root, "AnalysisSource", "analysisSource"),
+                GetString(root, "ArmResourceType", "armResourceType"),
+                GetString(root, "ArmApiVersion", "armApiVersion"),
+                GetString(root, "ArmKind", "armKind"),
+                GetString(root, "MappedResourceType", "mappedResourceType"),
+                GetString(root, "TerraformAddress", "terraformAddress"),
+                GetString(root, "TerraformActions", "terraformActions"),
+                GetString(root, "TerraformChangeType", "terraformChangeType"),
+                GetString(root, "BeforeSummary", "beforeSummary"),
+                GetString(root, "AfterSummary", "afterSummary"),
+                GetString(root, "PricingCatalogName", "pricingCatalogName"),
+                GetString(root, "PricingCatalogVersion", "pricingCatalogVersion"),
+                GetString(root, "PricingSource", "pricingSource"),
+                GetString(root, "PricingSourceType", "pricingSourceType"),
+                GetString(root, "PricingMatchType", "pricingMatchType"),
+                GetString(root, "PricingFallbackReason", "pricingFallbackReason"),
+                GetString(root, "PricingUnit", "pricingUnit"),
+                GetDecimal(root, "PricingUnitPrice", "pricingUnitPrice"),
+                GetString(root, "PricingMatchedKey", "pricingMatchedKey"),
+                GetString(root, "PricingConfidenceImpact", "pricingConfidenceImpact"),
+                GetBool(root, "PricingLiveApiUsed", "pricingLiveApiUsed"),
+                GetBool(root, "PricingFallbackUsed", "pricingFallbackUsed"),
+                GetBool(root, "PricingRegionDefaulted", "pricingRegionDefaulted"),
+                GetBool(root, "PricingAmbiguousMatch", "pricingAmbiguousMatch"),
+                GetInt(root, "PricingMonthlyHours", "pricingMonthlyHours"),
+                GetString(root, "PricingUnitOfMeasure", "pricingUnitOfMeasure"),
+                GetString(root, "PricingMeterId", "pricingMeterId"),
+                GetString(root, "PricingMeterName", "pricingMeterName"),
+                GetString(root, "PricingProductName", "pricingProductName"),
+                GetString(root, "PricingSkuName", "pricingSkuName"),
+                GetString(root, "PricingArmSkuName", "pricingArmSkuName"),
+                GetString(root, "PricingServiceName", "pricingServiceName"),
+                GetString(root, "PricingServiceFamily", "pricingServiceFamily"),
+                GetString(root, "PricingPriceType", "pricingPriceType"),
+                GetDateTimeOffset(root, "PricingEffectiveStartDate", "pricingEffectiveStartDate"),
+                GetEnum<CostCategory>(root, "Category", "category"),
+                GetInt(root, "Quantity", "quantity"),
+                GetInt(root, "HoursPerMonth", "hoursPerMonth"),
+                GetDecimal(root, "MonthlyCost", "monthlyCost"),
+                GetDecimal(root, "MonthlyDelta", "monthlyDelta"),
+                GetEnum<ConfidenceLevel>(root, "Confidence", "confidence"),
+                GetEnum<EstimateStatus>(root, "Status", "status"));
+        }
+        catch (JsonException)
+        {
+            return Empty;
+        }
+    }
+
+    private static ResourceRawMetadata Empty { get; } = new(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, false, false, false, false, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+
+    private static string? GetString(JsonElement root, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!root.TryGetProperty(name, out var value))
+            {
+                continue;
+            }
+
+            return value.ValueKind switch
+            {
+                JsonValueKind.String => value.GetString(),
+                JsonValueKind.Number => value.GetRawText(),
+                JsonValueKind.True => "true",
+                JsonValueKind.False => "false",
+                _ => null
+            };
+        }
+
+        return null;
+    }
+
+    private static decimal? GetDecimal(JsonElement root, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!root.TryGetProperty(name, out var value))
+            {
+                continue;
+            }
+
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetDecimal(out var parsedNumber))
+            {
+                return parsedNumber;
+            }
+
+            var text = GetString(root, name);
+            if (decimal.TryParse(text, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed))
+            {
+                return parsed;
+            }
+        }
+
+        return null;
+    }
+
+    private static int? GetInt(JsonElement root, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!root.TryGetProperty(name, out var value))
+            {
+                continue;
+            }
+
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var parsedNumber))
+            {
+                return parsedNumber;
+            }
+
+            var text = GetString(root, name);
+            if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+            {
+                return parsed;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool GetBool(JsonElement root, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!root.TryGetProperty(name, out var value))
+            {
+                continue;
+            }
+
+            if (value.ValueKind == JsonValueKind.True)
+            {
+                return true;
+            }
+
+            if (value.ValueKind == JsonValueKind.False)
+            {
+                return false;
+            }
+
+            var text = GetString(root, name);
+            if (bool.TryParse(text, out var parsed))
+            {
+                return parsed;
+            }
+        }
+
+        return false;
+    }
+
+    private static DateTimeOffset? GetDateTimeOffset(JsonElement root, params string[] names)
+    {
+        var text = GetString(root, names);
+        return DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed)
+            ? parsed
+            : null;
+    }
+
+    private static TEnum? GetEnum<TEnum>(JsonElement root, params string[] names)
+        where TEnum : struct
+    {
+        var text = GetString(root, names);
+        return Enum.TryParse<TEnum>(text, ignoreCase: true, out var parsed) ? parsed : null;
+    }
+}
+
+public static class LocalAuth
+{
+    public const string CookieName = "spendgov_user_id";
 }

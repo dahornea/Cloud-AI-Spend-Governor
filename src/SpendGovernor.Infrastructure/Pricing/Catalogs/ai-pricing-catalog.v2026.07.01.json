@@ -1,0 +1,24 @@
+{
+  "provider": "AI",
+  "name": "Local AI MVP Catalog",
+  "version": "2026.07.01",
+  "source": "Local seeded AI model catalog",
+  "sourceType": "LocalStaticCatalog",
+  "currency": "EUR",
+  "defaultRegion": "global",
+  "effectiveFrom": "2026-07-01",
+  "lastUpdatedAt": "2026-07-01",
+  "notes": "MVP static token prices. Not live OpenAI or Azure OpenAI pricing.",
+  "items": [
+    { "id": "ai-openai-gpt-4-1", "provider": "openai", "service": "OpenAI", "resourceType": "ai.workflow", "sku": "gpt-4.1", "currency": "EUR", "unit": "1M tokens", "inputPricePerMillionTokens": 2.0, "outputPricePerMillionTokens": 8.0, "priceType": "LocalStaticCatalog", "meterName": "gpt-4.1 token pricing" },
+    { "id": "ai-openai-gpt-4-1-mini", "provider": "openai", "service": "OpenAI", "resourceType": "ai.workflow", "sku": "gpt-4.1-mini", "currency": "EUR", "unit": "1M tokens", "inputPricePerMillionTokens": 0.4, "outputPricePerMillionTokens": 1.6, "priceType": "LocalStaticCatalog", "meterName": "gpt-4.1-mini token pricing" },
+    { "id": "ai-openai-gpt-4o", "provider": "openai", "service": "OpenAI", "resourceType": "ai.workflow", "sku": "gpt-4o", "currency": "EUR", "unit": "1M tokens", "inputPricePerMillionTokens": 4.6, "outputPricePerMillionTokens": 13.8, "priceType": "LocalStaticCatalog", "meterName": "gpt-4o token pricing" },
+    { "id": "ai-openai-gpt-4o-mini", "provider": "openai", "service": "OpenAI", "resourceType": "ai.workflow", "sku": "gpt-4o-mini", "currency": "EUR", "unit": "1M tokens", "inputPricePerMillionTokens": 0.14, "outputPricePerMillionTokens": 0.56, "priceType": "LocalStaticCatalog", "meterName": "gpt-4o-mini token pricing" },
+    { "id": "ai-openai-embedding-small", "provider": "openai", "service": "OpenAI", "resourceType": "ai.workflow", "sku": "text-embedding-3-small", "currency": "EUR", "unit": "1M tokens", "inputPricePerMillionTokens": 0.02, "outputPricePerMillionTokens": 0, "priceType": "LocalStaticCatalog", "meterName": "text-embedding-3-small token pricing" },
+    { "id": "ai-openai-embedding-large", "provider": "openai", "service": "OpenAI", "resourceType": "ai.workflow", "sku": "text-embedding-3-large", "currency": "EUR", "unit": "1M tokens", "inputPricePerMillionTokens": 0.12, "outputPricePerMillionTokens": 0, "priceType": "LocalStaticCatalog", "meterName": "text-embedding-3-large token pricing" },
+    { "id": "ai-azure-openai-gpt-4-1", "provider": "azure-openai", "service": "Azure OpenAI", "resourceType": "ai.workflow", "sku": "gpt-4.1", "currency": "EUR", "unit": "1M tokens", "inputPricePerMillionTokens": 2.0, "outputPricePerMillionTokens": 8.0, "priceType": "LocalStaticCatalog", "meterName": "Azure OpenAI gpt-4.1 token pricing" },
+    { "id": "ai-azure-openai-gpt-4-1-mini", "provider": "azure-openai", "service": "Azure OpenAI", "resourceType": "ai.workflow", "sku": "gpt-4.1-mini", "currency": "EUR", "unit": "1M tokens", "inputPricePerMillionTokens": 0.4, "outputPricePerMillionTokens": 1.6, "priceType": "LocalStaticCatalog", "meterName": "Azure OpenAI gpt-4.1-mini token pricing" },
+    { "id": "ai-azure-openai-gpt-4o", "provider": "azure-openai", "service": "Azure OpenAI", "resourceType": "ai.workflow", "sku": "gpt-4o", "currency": "EUR", "unit": "1M tokens", "inputPricePerMillionTokens": 4.6, "outputPricePerMillionTokens": 13.8, "priceType": "LocalStaticCatalog", "meterName": "Azure OpenAI gpt-4o token pricing" },
+    { "id": "ai-azure-openai-gpt-4o-mini", "provider": "azure-openai", "service": "Azure OpenAI", "resourceType": "ai.workflow", "sku": "gpt-4o-mini", "currency": "EUR", "unit": "1M tokens", "inputPricePerMillionTokens": 0.14, "outputPricePerMillionTokens": 0.56, "priceType": "LocalStaticCatalog", "meterName": "Azure OpenAI gpt-4o-mini token pricing" }
+  ]
+}

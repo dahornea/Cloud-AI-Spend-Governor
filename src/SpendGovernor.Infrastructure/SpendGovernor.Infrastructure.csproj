@@ -24,4 +24,8 @@
     <ProjectReference Include="..\SpendGovernor.Core\SpendGovernor.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="Pricing\Catalogs\*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

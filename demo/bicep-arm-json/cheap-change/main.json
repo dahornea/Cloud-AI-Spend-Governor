@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {},
+  "variables": {},
+  "resources": [
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2023-01-01",
+      "name": "cheapdemostorage",
+      "location": "westeurope",
+      "sku": {
+        "name": "Standard_LRS",
+        "tier": "Standard"
+      },
+      "kind": "StorageV2",
+      "tags": {
+        "environment": "dev"
+      },
+      "properties": {
+        "accessTier": "Hot",
+        "estimatedGb": 100
+      }
+    },
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2022-03-01",
+      "name": "cheap-demo-plan",
+      "location": "westeurope",
+      "sku": {
+        "name": "B1",
+        "tier": "Basic",
+        "capacity": 1
+      },
+      "kind": "linux",
+      "tags": {
+        "environment": "dev"
+      },
+      "properties": {
+        "reserved": true
+      }
+    }
+  ],
+  "outputs": {}
+}

@@ -335,21 +335,35 @@ public static class PrCommentRenderer
         builder.AppendLine($"| Final decision | {FormatDecision(analysis.PolicyStatus)} |");
         builder.AppendLine();
 
+        AppendAnalysisSource(builder, result);
+
         if (result.CostChanges.Count > 0)
         {
             builder.AppendLine("### Main cost drivers");
             builder.AppendLine();
-            builder.AppendLine("| Resource | Change | Estimated monthly impact |");
-            builder.AppendLine("|---|---:|---:|");
-            foreach (var change in result.CostChanges.OrderByDescending(change => Math.Abs(change.MonthlyDelta)).Take(10))
+            if (UsesTerraformPlanJson(result))
             {
-                var skuChange = change.ChangeKind switch
+                builder.AppendLine("| Resource | Change | Before | After | Estimated monthly delta |");
+                builder.AppendLine("|---|---|---:|---:|---:|");
+                foreach (var change in result.CostChanges.OrderByDescending(change => Math.Abs(change.MonthlyDelta)).Take(10))
                 {
-                    "added" => $"New {change.AfterSku ?? "resource"}",
-                    "removed" => $"Removed {change.BeforeSku ?? "resource"}",
-                    _ => $"{change.BeforeSku ?? "-"} -> {change.AfterSku ?? "-"}"
-                };
-                builder.AppendLine($"| {Escape(change.ResourceName)} | {Escape(skuChange)} | {FormatDelta(change.MonthlyDelta, analysis.Currency)} |");
+                    builder.AppendLine($"| {Escape(change.TerraformAddress ?? change.ResourceName)} | {Escape(FormatChangeKind(change.ChangeKind))} | {Escape(change.BeforeSummary ?? change.BeforeSku ?? "-")} | {Escape(change.AfterSummary ?? change.AfterSku ?? "-")} | {FormatDelta(change.MonthlyDelta, analysis.Currency)} |");
+                }
+            }
+            else
+            {
+                builder.AppendLine("| Resource | Change | Estimated monthly impact |");
+                builder.AppendLine("|---|---:|---:|");
+                foreach (var change in result.CostChanges.OrderByDescending(change => Math.Abs(change.MonthlyDelta)).Take(10))
+                {
+                    var skuChange = change.ChangeKind switch
+                    {
+                        "added" => $"New {change.AfterSku ?? "resource"}",
+                        "removed" => $"Removed {change.BeforeSku ?? "resource"}",
+                        _ => $"{change.BeforeSku ?? "-"} -> {change.AfterSku ?? "-"}"
+                    };
+                    builder.AppendLine($"| {Escape(change.ResourceName)} | {Escape(skuChange)} | {FormatDelta(change.MonthlyDelta, analysis.Currency)} |");
+                }
             }
 
             builder.AppendLine();
@@ -359,11 +373,23 @@ public static class PrCommentRenderer
         {
             builder.AppendLine("### Detected resources and workflows");
             builder.AppendLine();
-            builder.AppendLine("| Resource/workflow | Type | SKU/model | Region | Monthly cost | Confidence |");
-            builder.AppendLine("|---|---|---|---|---:|---|");
-            foreach (var resource in result.ProposedResources.Take(12))
+            if (UsesArmTemplateJson(result))
             {
-                builder.AppendLine($"| {Escape(resource.ResourceName)} | {Escape(resource.ResourceType)} | {Escape(resource.Sku ?? "-")} | {Escape(resource.Region ?? "-")} | {FormatMoney(resource.MonthlyCost, analysis.Currency)} | {FormatConfidence(resource.Confidence)} |");
+                builder.AppendLine("| Resource | ARM type | Mapped type | SKU | Region | Estimated monthly cost | Confidence |");
+                builder.AppendLine("|---|---|---|---|---|---:|---|");
+                foreach (var resource in result.ProposedResources.Take(12))
+                {
+                    builder.AppendLine($"| {Escape(resource.ResourceName)} | {Escape(resource.ArmResourceType ?? "-")} | {Escape(resource.MappedResourceType ?? resource.ResourceType)} | {Escape(resource.Sku ?? "-")} | {Escape(resource.Region ?? "-")} | {FormatMoney(resource.MonthlyCost, analysis.Currency)} | {FormatConfidence(resource.Confidence)} |");
+                }
+            }
+            else
+            {
+                builder.AppendLine("| Resource/workflow | Type | SKU/model | Region | Monthly cost | Confidence |");
+                builder.AppendLine("|---|---|---|---|---:|---|");
+                foreach (var resource in result.ProposedResources.Take(12))
+                {
+                    builder.AppendLine($"| {Escape(resource.ResourceName)} | {Escape(resource.ResourceType)} | {Escape(resource.Sku ?? "-")} | {Escape(resource.Region ?? "-")} | {FormatMoney(resource.MonthlyCost, analysis.Currency)} | {FormatConfidence(resource.Confidence)} |");
+                }
             }
 
             builder.AppendLine();
@@ -389,6 +415,7 @@ public static class PrCommentRenderer
         }
 
         builder.AppendLine();
+        AppendPricingMetadata(builder, result);
 
         builder.AppendLine("### Recommendation");
         builder.AppendLine();
@@ -435,13 +462,161 @@ public static class PrCommentRenderer
     {
         var analysis = result.Analysis;
         var region = result.ProposedResources.Select(resource => resource.Region).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        if (UsesTerraformPlanJson(result))
+        {
+            yield return "AnalysisSource: Terraform plan JSON";
+            yield return "TerraformPlanFormat: terraform show -json";
+        }
+        else if (UsesArmTemplateJson(result))
+        {
+            yield return "AnalysisSource: Bicep compiled ARM JSON";
+            yield return "ArmTemplateFormat: ARM deployment template JSON";
+            yield return "ArmTemplateDiffMode: DesiredStateOnly";
+        }
+
         yield return $"Region: {region ?? "not detected"}";
-        yield return "Pricing source: local MVP static pricing catalog";
+        yield return "Pricing source: local versioned MVP pricing catalog";
         yield return $"Usage estimate: {result.ProposedResources.FirstOrDefault(resource => resource.HoursPerMonth > 0)?.HoursPerMonth ?? 730} hours/month for always-on resources";
         yield return "Catalog version: local MVP catalog";
         yield return $"Currency: {analysis.Currency}";
+        if (!string.IsNullOrWhiteSpace(analysis.BudgetSource))
+        {
+            yield return $"BudgetSource: {analysis.BudgetSource}";
+        }
+
         yield return $"Confidence rule: {FormatConfidence(analysis.OverallConfidence)} based on detected resource type, SKU, region, and catalog price availability";
     }
+
+    private static void AppendPricingMetadata(StringBuilder builder, AnalysisResult result)
+    {
+        var priced = result.ProposedResources
+            .Concat(result.BaselineResources)
+            .Where(resource => !string.IsNullOrWhiteSpace(resource.PricingCatalogVersion)
+                || !string.IsNullOrWhiteSpace(resource.PricingSourceType)
+                || !string.IsNullOrWhiteSpace(resource.PricingSource))
+            .ToArray();
+        if (priced.Length == 0)
+        {
+            return;
+        }
+
+        var first = priced[0];
+        var matchQuality = string.Join(", ", priced
+            .Select(resource => resource.PricingMatchType)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(4));
+        builder.AppendLine("### Pricing metadata");
+        builder.AppendLine();
+        builder.AppendLine($"- Pricing source: {Escape(first.PricingLiveApiUsed ? "Azure Retail Prices API" : first.PricingCatalogName ?? first.PricingSource ?? "unknown")}");
+        if (!first.PricingLiveApiUsed)
+        {
+            builder.AppendLine($"- Catalog version: {Escape(first.PricingCatalogVersion ?? "unknown")}");
+        }
+
+        builder.AppendLine($"- Currency: {Escape(result.Analysis.Currency)}");
+        builder.AppendLine($"- Region: {Escape(first.Region ?? "not detected")}");
+        builder.AppendLine($"- Match quality: {Escape(string.IsNullOrWhiteSpace(matchQuality) ? "Unknown" : matchQuality)}");
+        if (first.PricingUnitPrice is not null)
+        {
+            builder.AppendLine($"- Unit price: {FormatMoney(first.PricingUnitPrice, result.Analysis.Currency)}/{Escape(first.PricingUnitOfMeasure ?? first.PricingUnit ?? "unit")}");
+        }
+
+        if (priced.Any(resource => !resource.ResourceType.Equals("ai.workflow", StringComparison.OrdinalIgnoreCase) && resource.HoursPerMonth > 0))
+        {
+            builder.AppendLine($"- Monthly hours assumption: {first.PricingMonthlyHours ?? first.HoursPerMonth}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(first.PricingMeterName))
+        {
+            builder.AppendLine($"- Meter: {Escape(first.PricingMeterName!)}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(first.PricingProductName))
+        {
+            builder.AppendLine($"- Product: {Escape(first.PricingProductName!)}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(first.PricingSkuName ?? first.PricingArmSkuName))
+        {
+            builder.AppendLine($"- SKU: {Escape(first.PricingArmSkuName ?? first.PricingSkuName ?? "unknown")}");
+        }
+
+        if (first.PricingEffectiveStartDate is not null)
+        {
+            builder.AppendLine($"- Effective start date: {first.PricingEffectiveStartDate:yyyy-MM-dd}");
+        }
+
+        builder.AppendLine($"- Fallback used: {(priced.Any(resource => resource.PricingFallbackUsed) ? "Yes" : "No")}");
+
+        var fallback = priced.FirstOrDefault(resource => !string.IsNullOrWhiteSpace(resource.PricingFallbackReason));
+        if (fallback is not null)
+        {
+            builder.AppendLine($"- Fallback reason: {Escape(fallback.PricingFallbackReason!)}");
+        }
+
+        var aiResources = priced.Where(resource => resource.ResourceType.Equals("ai.workflow", StringComparison.OrdinalIgnoreCase)).Take(5).ToArray();
+        if (aiResources.Length > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine("### AI pricing metadata");
+            builder.AppendLine();
+            foreach (var ai in aiResources)
+            {
+                builder.AppendLine($"- Model: {Escape(ai.Sku ?? "unknown")} - Catalog version: {Escape(ai.PricingCatalogVersion ?? "unknown")} - Source: {Escape(ai.PricingCatalogName ?? ai.PricingSource ?? "unknown")} - Currency: {Escape(ai.Currency)}");
+            }
+        }
+
+        builder.AppendLine();
+    }
+
+    private static void AppendAnalysisSource(StringBuilder builder, AnalysisResult result)
+    {
+        builder.AppendLine("### Analysis source");
+        builder.AppendLine();
+        if (UsesTerraformPlanJson(result))
+        {
+            builder.AppendLine("Terraform plan JSON was detected and used for this report.");
+        }
+        else if (UsesArmTemplateJson(result))
+        {
+            builder.AppendLine("Bicep compiled ARM JSON was detected and used for this report.");
+        }
+        else if (result.ProposedResources.Any(resource => resource.SourceType == ResourceSourceType.Terraform))
+        {
+            builder.AppendLine("Analysis source: Terraform `.tf` parser fallback. Confidence may be lower.");
+        }
+        else if (result.ProposedResources.Any(resource => resource.SourceType == ResourceSourceType.Bicep))
+        {
+            builder.AppendLine("Analysis source: Raw Bicep parser fallback. Confidence may be lower. For better accuracy, generate compiled ARM JSON with `az bicep build`.");
+        }
+        else
+        {
+            builder.AppendLine("Analysis source: existing configured analyzers.");
+        }
+
+        builder.AppendLine();
+    }
+
+    private static bool UsesTerraformPlanJson(AnalysisResult result)
+    {
+        return result.ProposedResources.Any(resource => resource.AnalysisSource == TerraformPlanJsonParser.AnalysisSource)
+            || result.CostChanges.Any(change => !string.IsNullOrWhiteSpace(change.TerraformAddress));
+    }
+
+    private static bool UsesArmTemplateJson(AnalysisResult result)
+    {
+        return result.ProposedResources.Any(resource => resource.AnalysisSource == ArmTemplateJsonParser.AnalysisSource);
+    }
+
+    private static string FormatChangeKind(string changeKind) => changeKind.ToLowerInvariant() switch
+    {
+        "added" => "Added",
+        "removed" => "Removed",
+        "changed" => "Modified",
+        "modified" => "Modified",
+        _ => "Changed"
+    };
 
     private static void AppendDashboardLink(StringBuilder builder, AnalysisResult result)
     {

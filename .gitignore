@@ -36,6 +36,12 @@ api.err.log
 !.env.example
 appsettings.Local.json
 appsettings.*.local.json
+appsettings.Production.json
+appsettings.Docker.local.json
+*.pem
+*.key
+*.pfx
+secrets/
 
 # Local databases and SQL Server files
 *.db

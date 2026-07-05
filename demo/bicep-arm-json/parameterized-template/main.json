@@ -1,0 +1,62 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "westeurope"
+    },
+    "skuName": {
+      "type": "string",
+      "defaultValue": "P1v3"
+    },
+    "environment": {
+      "type": "string",
+      "defaultValue": "dev"
+    }
+  },
+  "variables": {
+    "servicePlanName": "parameterized-api-plan",
+    "servicePlanSku": "[parameters('skuName')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2022-03-01",
+      "name": "[variables('servicePlanName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[variables('servicePlanSku')]",
+        "tier": "PremiumV3",
+        "capacity": 1
+      },
+      "kind": "linux",
+      "tags": {
+        "environment": "[parameters('environment')]",
+        "owner": "[concat('team-', parameters('environment'))]"
+      },
+      "properties": {
+        "reserved": true
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2023-01-01",
+      "name": "parameterizedstorage",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Standard_LRS",
+        "tier": "Standard"
+      },
+      "kind": "StorageV2",
+      "tags": {
+        "environment": "[parameters('environment')]"
+      },
+      "properties": {
+        "accessTier": "Hot",
+        "estimatedGb": 100
+      }
+    }
+  ],
+  "outputs": {}
+}

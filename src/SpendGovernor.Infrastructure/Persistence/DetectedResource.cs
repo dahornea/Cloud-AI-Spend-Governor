@@ -11,7 +11,8 @@ public sealed class DetectedResource
     public string ResourceName { get; set; } = "";
     public string? Sku { get; set; }
     public string? Region { get; set; }
+    public string? TerraformAddress { get; set; }
+    public string? TerraformActions { get; set; }
     public string RawJson { get; set; } = "{}";
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
-

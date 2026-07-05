@@ -1,0 +1,33 @@
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: spend-governor-sql
+    environment:
+      ACCEPT_EULA: "${ACCEPT_EULA:-Y}"
+      MSSQL_SA_PASSWORD: "${SA_PASSWORD:?Set SA_PASSWORD in .env}"
+    ports:
+      - "14333:1433"
+    volumes:
+      - spend-governor-sql-data:/var/opt/mssql
+
+  spend-governor-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: spend-governor-api
+    depends_on:
+      - sqlserver
+    env_file:
+      - .env
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Docker"
+      ASPNETCORE_URLS: "http://+:8080"
+      ConnectionStrings__SpendGovernorDb: "Server=sqlserver,1433;Database=Spend-Governor;User Id=sa;Password=${SA_PASSWORD};TrustServerCertificate=True;Encrypt=False;MultipleActiveResultSets=true"
+      GitHub__Mode: "Simulated"
+      GitHub__WebhookSecret: "${GITHUB_WEBHOOK_SECRET:-}"
+      Pricing__AzureRetailPrices__Enabled: "false"
+    ports:
+      - "5102:8080"
+
+volumes:
+  spend-governor-sql-data:

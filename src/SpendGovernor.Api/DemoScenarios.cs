@@ -17,6 +17,9 @@ public static class DemoScenarios
             "scenario-cheap-change" => SmallVm(project, dashboardBaseUrl),
             "scenario-expensive-cloud-change" => ExpensiveCloudChange(project, dashboardBaseUrl),
             "scenario-expensive-ai-workflow" => AiExpensive(project, dashboardBaseUrl),
+            "bicep-arm-cheap-change" => BicepArmCheapChange(project, dashboardBaseUrl),
+            "bicep-arm-expensive-cloud-change" => BicepArmExpensiveCloudChange(project, dashboardBaseUrl),
+            "bicep-arm-parameterized-template" => BicepArmParameterizedTemplate(project, dashboardBaseUrl),
             "no-cloud-impact" => NoCloudImpact(project, dashboardBaseUrl),
             "sku-threshold" => SkuThreshold(project, dashboardBaseUrl),
             "unknown-resource" => UnknownResource(project, dashboardBaseUrl),
@@ -257,6 +260,175 @@ public static class DemoScenarios
         return Base(project, 106, "infra/staging-etl", "demo-approval", [".spendgov.yml", "infra/staging/main.tf"], [], [
             new RepositoryFile(".spendgov.yml", policy),
             new RepositoryFile("infra/staging/main.tf", proposed)
+        ], dashboardBaseUrl);
+    }
+
+    private static AnalysisRequest BicepArmCheapChange(Project project, string dashboardBaseUrl)
+    {
+        const string compiledArm =
+            """
+            {
+              "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+              "contentVersion": "1.0.0.0",
+              "parameters": {},
+              "variables": {},
+              "resources": [
+                {
+                  "type": "Microsoft.Storage/storageAccounts",
+                  "apiVersion": "2023-01-01",
+                  "name": "cheapdemostorage",
+                  "location": "westeurope",
+                  "sku": { "name": "Standard_LRS", "tier": "Standard" },
+                  "kind": "StorageV2",
+                  "tags": { "environment": "dev" },
+                  "properties": { "accessTier": "Hot", "estimatedGb": 100 }
+                },
+                {
+                  "type": "Microsoft.Web/serverfarms",
+                  "apiVersion": "2022-03-01",
+                  "name": "cheap-demo-plan",
+                  "location": "westeurope",
+                  "sku": { "name": "B1", "tier": "Basic", "capacity": 1 },
+                  "kind": "linux",
+                  "tags": { "environment": "dev" },
+                  "properties": { "reserved": true }
+                }
+              ],
+              "outputs": {}
+            }
+            """;
+
+        const string rawBicep =
+            """
+            // Raw Bicep remains present, but compiled ARM JSON is preferred.
+            resource plan 'Microsoft.Web/serverfarms@2022-03-01' = {
+              name: 'raw-bicep-fallback-plan'
+              location: 'westeurope'
+              sku: { name: 'B1' }
+            }
+            """;
+
+        return Base(project, 108, "infra/bicep-arm-cheap", "demo-bicep-arm-cheap", ["infra/main.bicep", "infra/main.json"], [], [
+            new RepositoryFile("infra/main.bicep", rawBicep),
+            new RepositoryFile("infra/main.json", compiledArm)
+        ], dashboardBaseUrl);
+    }
+
+    private static AnalysisRequest BicepArmExpensiveCloudChange(Project project, string dashboardBaseUrl)
+    {
+        const string policy =
+            """
+            version: 1
+            currency: EUR
+            defaultRegion: westeurope
+            hoursPerMonth: 730
+
+            rules:
+              - id: dev-delta-limit
+                description: Block dev PRs above 100 EUR/month
+                type: monthly_delta
+                threshold: 100
+                action: block
+
+            environments:
+              staging:
+                monthlyBudget: 150
+                action: block
+            """;
+        const string compiledArm =
+            """
+            {
+              "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+              "contentVersion": "1.0.0.0",
+              "parameters": {},
+              "variables": {},
+              "resources": [
+                {
+                  "type": "Microsoft.Cache/Redis",
+                  "apiVersion": "2023-08-01",
+                  "name": "redis-prod-demo",
+                  "location": "westeurope",
+                  "sku": { "name": "Premium", "family": "P", "capacity": 1 },
+                  "tags": { "environment": "staging" },
+                  "properties": { "enableNonSslPort": false, "minimumTlsVersion": "1.2" }
+                },
+                {
+                  "type": "Microsoft.Web/serverfarms",
+                  "apiVersion": "2022-03-01",
+                  "name": "expensive-api-plan",
+                  "location": "westeurope",
+                  "sku": { "name": "P1v3", "tier": "PremiumV3", "capacity": 1 },
+                  "kind": "linux",
+                  "tags": { "environment": "staging" },
+                  "properties": { "reserved": true }
+                },
+                {
+                  "type": "Microsoft.OperationalInsights/workspaces",
+                  "apiVersion": "2022-10-01",
+                  "name": "expensive-demo-logs",
+                  "location": "westeurope",
+                  "sku": { "name": "PerGB2018" },
+                  "tags": { "environment": "staging" },
+                  "properties": { "retentionInDays": 30, "estimatedIngestionGbPerMonth": 50 }
+                }
+              ],
+              "outputs": {}
+            }
+            """;
+
+        return Base(project, 109, "infra/bicep-arm-expensive", "demo-bicep-arm-expensive", [".spendgov.yml", "infra/main.json"], [], [
+            new RepositoryFile(".spendgov.yml", policy),
+            new RepositoryFile("infra/main.json", compiledArm)
+        ], dashboardBaseUrl);
+    }
+
+    private static AnalysisRequest BicepArmParameterizedTemplate(Project project, string dashboardBaseUrl)
+    {
+        const string compiledArm =
+            """
+            {
+              "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+              "contentVersion": "1.0.0.0",
+              "parameters": {
+                "location": { "type": "string", "defaultValue": "westeurope" },
+                "skuName": { "type": "string", "defaultValue": "P1v3" },
+                "environment": { "type": "string", "defaultValue": "dev" }
+              },
+              "variables": {
+                "servicePlanName": "parameterized-api-plan",
+                "servicePlanSku": "[parameters('skuName')]"
+              },
+              "resources": [
+                {
+                  "type": "Microsoft.Web/serverfarms",
+                  "apiVersion": "2022-03-01",
+                  "name": "[variables('servicePlanName')]",
+                  "location": "[parameters('location')]",
+                  "sku": { "name": "[variables('servicePlanSku')]", "tier": "PremiumV3", "capacity": 1 },
+                  "kind": "linux",
+                  "tags": {
+                    "environment": "[parameters('environment')]",
+                    "owner": "[concat('team-', parameters('environment'))]"
+                  },
+                  "properties": { "reserved": true }
+                },
+                {
+                  "type": "Microsoft.Storage/storageAccounts",
+                  "apiVersion": "2023-01-01",
+                  "name": "parameterizedstorage",
+                  "location": "[parameters('location')]",
+                  "sku": { "name": "Standard_LRS", "tier": "Standard" },
+                  "kind": "StorageV2",
+                  "tags": { "environment": "[parameters('environment')]" },
+                  "properties": { "accessTier": "Hot", "estimatedGb": 100 }
+                }
+              ],
+              "outputs": {}
+            }
+            """;
+
+        return Base(project, 110, "infra/bicep-arm-parameterized", "demo-bicep-arm-parameterized", ["infra/main.json"], [], [
+            new RepositoryFile("infra/main.json", compiledArm)
         ], dashboardBaseUrl);
     }
 

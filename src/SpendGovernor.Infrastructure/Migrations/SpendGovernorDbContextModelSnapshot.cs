@@ -22,11 +22,63 @@ namespace SpendGovernor.Infrastructure.Migrations
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.ApplicationUser", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(320)
+                        .HasColumnType("nvarchar(320)");
+
+                    b.Property<DateTimeOffset?>("LastLoginAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("PasswordHash")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("UserName")
+                        .IsRequired()
+                        .HasMaxLength(320)
+                        .HasColumnType("nvarchar(320)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Email")
+                        .IsUnique();
+
+                    b.HasIndex("UserName");
+
+                    b.ToTable("ApplicationUsers", (string)null);
+                });
+
             modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.CostBreakdownItem", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("AfterSummary")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<string>("BeforeSummary")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
 
                     b.Property<string>("ChangeType")
                         .IsRequired()
@@ -45,6 +97,22 @@ namespace SpendGovernor.Infrastructure.Migrations
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
 
+                    b.Property<string>("PricingCatalogVersion")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("PricingFallbackReason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<string>("PricingMatchType")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("PricingSource")
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
                     b.Property<Guid>("PullRequestScanId")
                         .HasColumnType("uniqueidentifier");
 
@@ -61,6 +129,14 @@ namespace SpendGovernor.Infrastructure.Migrations
                         .IsRequired()
                         .HasMaxLength(400)
                         .HasColumnType("nvarchar(400)");
+
+                    b.Property<string>("TerraformActions")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("TerraformAddress")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
 
                     b.HasKey("Id");
 
@@ -113,11 +189,67 @@ namespace SpendGovernor.Infrastructure.Migrations
                         .HasMaxLength(1000)
                         .HasColumnType("nvarchar(1000)");
 
+                    b.Property<string>("TerraformActions")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("TerraformAddress")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
                     b.HasKey("Id");
 
                     b.HasIndex("PullRequestScanId");
 
                     b.ToTable("DetectedResources", (string)null);
+                });
+
+            modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.EnvironmentBudget", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("BlockOnBudgetExceeded")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
+
+                    b.Property<string>("Environment")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<decimal?>("MaxMonthlyCost")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal?>("MaxMonthlyDelta")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal?>("RequireApprovalAbove")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectId", "Environment")
+                        .IsUnique();
+
+                    b.ToTable("EnvironmentBudgets", (string)null);
                 });
 
             modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.PolicyEvaluation", b =>
@@ -152,6 +284,67 @@ namespace SpendGovernor.Infrastructure.Migrations
                     b.HasIndex("PullRequestScanId");
 
                     b.ToTable("PolicyEvaluations", (string)null);
+                });
+
+            modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.ProjectEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
+
+                    b.Property<string>("DefaultRegion")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<int>("HoursPerMonth")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("PolicyYaml")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("Slug")
+                        .IsRequired()
+                        .HasMaxLength(220)
+                        .HasColumnType("nvarchar(220)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid>("WorkspaceId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("WorkspaceId");
+
+                    b.HasIndex("WorkspaceId", "Slug")
+                        .IsUnique();
+
+                    b.ToTable("Projects", (string)null);
                 });
 
             modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.PullRequestScan", b =>
@@ -222,9 +415,10 @@ namespace SpendGovernor.Infrastructure.Migrations
 
                     b.Property<string>("ReportPublishingStatus")
                         .IsRequired()
-                        .HasDefaultValue("Pending")
+                        .ValueGeneratedOnAdd()
                         .HasMaxLength(50)
-                        .HasColumnType("nvarchar(50)");
+                        .HasColumnType("nvarchar(50)")
+                        .HasDefaultValue("Pending");
 
                     b.Property<Guid>("RepositoryId")
                         .HasColumnType("uniqueidentifier");
@@ -304,6 +498,9 @@ namespace SpendGovernor.Infrastructure.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<string>("Provider")
                         .IsRequired()
                         .HasMaxLength(50)
@@ -316,7 +513,13 @@ namespace SpendGovernor.Infrastructure.Migrations
 
                     b.HasIndex("FullName");
 
-                    b.HasIndex("Provider", "FullName")
+                    b.HasIndex("InstallationId");
+
+                    b.HasIndex("ProjectId");
+
+                    b.HasIndex("Provider", "FullName");
+
+                    b.HasIndex("ProjectId", "Provider", "FullName")
                         .IsUnique();
 
                     b.ToTable("Repositories", (string)null);
@@ -351,6 +554,78 @@ namespace SpendGovernor.Infrastructure.Migrations
                     b.ToTable("ScanAssumptions", (string)null);
                 });
 
+            modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.WorkspaceEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Slug")
+                        .IsRequired()
+                        .HasMaxLength(220)
+                        .HasColumnType("nvarchar(220)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedByUserId");
+
+                    b.HasIndex("Slug")
+                        .IsUnique();
+
+                    b.ToTable("Workspaces", (string)null);
+                });
+
+            modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.WorkspaceMemberEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("WorkspaceId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Role");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("WorkspaceId");
+
+                    b.HasIndex("WorkspaceId", "UserId")
+                        .IsUnique();
+
+                    b.ToTable("WorkspaceMembers", (string)null);
+                });
+
             modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.CostBreakdownItem", b =>
                 {
                     b.HasOne("SpendGovernor.Infrastructure.Persistence.PullRequestScan", "PullRequestScan")
@@ -373,6 +648,17 @@ namespace SpendGovernor.Infrastructure.Migrations
                     b.Navigation("PullRequestScan");
                 });
 
+            modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.EnvironmentBudget", b =>
+                {
+                    b.HasOne("SpendGovernor.Infrastructure.Persistence.ProjectEntity", "Project")
+                        .WithMany("EnvironmentBudgets")
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Project");
+                });
+
             modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.PolicyEvaluation", b =>
                 {
                     b.HasOne("SpendGovernor.Infrastructure.Persistence.PullRequestScan", "PullRequestScan")
@@ -382,6 +668,17 @@ namespace SpendGovernor.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("PullRequestScan");
+                });
+
+            modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.ProjectEntity", b =>
+                {
+                    b.HasOne("SpendGovernor.Infrastructure.Persistence.WorkspaceEntity", "Workspace")
+                        .WithMany("Projects")
+                        .HasForeignKey("WorkspaceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Workspace");
                 });
 
             modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.PullRequestScan", b =>
@@ -395,6 +692,17 @@ namespace SpendGovernor.Infrastructure.Migrations
                     b.Navigation("Repository");
                 });
 
+            modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.Repository", b =>
+                {
+                    b.HasOne("SpendGovernor.Infrastructure.Persistence.ProjectEntity", "Project")
+                        .WithMany("Repositories")
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Project");
+                });
+
             modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.ScanAssumption", b =>
                 {
                     b.HasOne("SpendGovernor.Infrastructure.Persistence.PullRequestScan", "PullRequestScan")
@@ -404,6 +712,48 @@ namespace SpendGovernor.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("PullRequestScan");
+                });
+
+            modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.WorkspaceEntity", b =>
+                {
+                    b.HasOne("SpendGovernor.Infrastructure.Persistence.ApplicationUser", "CreatedByUser")
+                        .WithMany()
+                        .HasForeignKey("CreatedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("CreatedByUser");
+                });
+
+            modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.WorkspaceMemberEntity", b =>
+                {
+                    b.HasOne("SpendGovernor.Infrastructure.Persistence.ApplicationUser", "User")
+                        .WithMany("WorkspaceMembers")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SpendGovernor.Infrastructure.Persistence.WorkspaceEntity", "Workspace")
+                        .WithMany("WorkspaceMembers")
+                        .HasForeignKey("WorkspaceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("User");
+
+                    b.Navigation("Workspace");
+                });
+
+            modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.ApplicationUser", b =>
+                {
+                    b.Navigation("WorkspaceMembers");
+                });
+
+            modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.ProjectEntity", b =>
+                {
+                    b.Navigation("EnvironmentBudgets");
+
+                    b.Navigation("Repositories");
                 });
 
             modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.PullRequestScan", b =>
@@ -420,6 +770,13 @@ namespace SpendGovernor.Infrastructure.Migrations
             modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.Repository", b =>
                 {
                     b.Navigation("PullRequestScans");
+                });
+
+            modelBuilder.Entity("SpendGovernor.Infrastructure.Persistence.WorkspaceEntity", b =>
+                {
+                    b.Navigation("Projects");
+
+                    b.Navigation("WorkspaceMembers");
                 });
 #pragma warning restore 612, 618
         }

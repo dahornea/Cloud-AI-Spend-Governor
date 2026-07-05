@@ -6,6 +6,8 @@ const state = {
   selectedWorkspaceId: null,
   selectedProjectId: null,
   projectDetail: null,
+  currentUser: null,
+  budgets: [],
   analyses: [],
   selectedAnalysis: null,
   approvals: [],
@@ -31,6 +33,11 @@ function wireEvents() {
     localStorage.setItem("spendgov.email", state.email);
     await loadWorkspaces();
   });
+  $("loginButton").addEventListener("click", login);
+  $("registerButton").addEventListener("click", register);
+  $("logoutButton").addEventListener("click", logout);
+  $("createWorkspaceButton").addEventListener("click", createWorkspace);
+  $("createProjectButton").addEventListener("click", createProject);
   $("workspaceSelect").addEventListener("change", async (event) => {
     state.selectedWorkspaceId = event.target.value;
     await loadProjects();
@@ -43,6 +50,7 @@ function wireEvents() {
   $("seedDemoButton").addEventListener("click", seedDemoData);
   $("resetDemoButton").addEventListener("click", resetDemoData);
   $("refreshAnalysesButton").addEventListener("click", loadAnalyses);
+  $("saveBudgetsButton").addEventListener("click", saveBudgets);
   $("savePolicyButton").addEventListener("click", savePolicy);
   $("refreshAuditButton").addEventListener("click", loadAudit);
   $("exportSummaryButton").addEventListener("click", () => {
@@ -66,6 +74,7 @@ async function initDevDemoControls() {
 async function api(path, options = {}) {
   const response = await fetch(path, {
     ...options,
+    credentials: "same-origin",
     headers: {
       "Content-Type": "application/json",
       "X-User-Email": state.email,
@@ -82,10 +91,54 @@ async function api(path, options = {}) {
   return contentType.includes("application/json") ? response.json() : response.text();
 }
 
+async function login() {
+  state.email = $("emailInput").value.trim() || "demo@spendgov.local";
+  localStorage.setItem("spendgov.email", state.email);
+  await api("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({
+      email: state.email,
+      password: $("passwordInput").value
+    })
+  });
+  $("passwordInput").value = "";
+  showBanner(`Logged in as ${state.email}.`);
+  await loadWorkspaces();
+}
+
+async function register() {
+  state.email = $("emailInput").value.trim() || "demo@spendgov.local";
+  localStorage.setItem("spendgov.email", state.email);
+  await api("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({
+      email: state.email,
+      password: $("passwordInput").value,
+      displayName: $("displayNameInput").value.trim() || null
+    })
+  });
+  $("passwordInput").value = "";
+  showBanner(`Registered ${state.email}.`);
+  await loadWorkspaces();
+}
+
+async function logout() {
+  await api("/api/auth/logout", { method: "POST" });
+  state.email = "demo@spendgov.local";
+  localStorage.setItem("spendgov.email", state.email);
+  $("emailInput").value = state.email;
+  $("passwordInput").value = "";
+  showBanner("Logged out.");
+  await loadWorkspaces();
+}
+
 async function loadWorkspaces() {
   try {
+    const previousWorkspaceId = state.selectedWorkspaceId;
     state.workspaces = await api("/api/workspaces");
-    state.selectedWorkspaceId = state.workspaces[0]?.id || null;
+    state.selectedWorkspaceId = state.workspaces.some((workspace) => workspace.id === previousWorkspaceId)
+      ? previousWorkspaceId
+      : state.workspaces[0]?.id || null;
     renderWorkspaceSelect();
     await loadProjects();
   } catch (error) {
@@ -102,10 +155,64 @@ async function loadProjects() {
     return;
   }
 
+  const previousProjectId = state.selectedProjectId;
   state.projects = await api(`/api/workspaces/${state.selectedWorkspaceId}/projects`);
-  state.selectedProjectId = state.projects[0]?.id || null;
+  state.selectedProjectId = state.projects.some((project) => project.id === previousProjectId)
+    ? previousProjectId
+    : state.projects[0]?.id || null;
   renderProjectSelect();
   await loadProjectDetail();
+}
+
+async function createWorkspace() {
+  const name = $("workspaceNameInput").value.trim();
+  if (!name) {
+    showBanner("Workspace name is required.", true);
+    return;
+  }
+
+  const workspace = await api("/api/workspaces", {
+    method: "POST",
+    body: JSON.stringify({ name })
+  });
+  $("workspaceNameInput").value = "";
+  state.selectedWorkspaceId = workspace.id;
+  showBanner(`Created workspace ${workspace.name}.`);
+  await loadWorkspaces();
+}
+
+async function createProject() {
+  if (!state.selectedWorkspaceId) {
+    showBanner("Select or create a workspace first.", true);
+    return;
+  }
+
+  const name = $("projectNameInput").value.trim();
+  const owner = $("repoOwnerInput").value.trim();
+  const repositoryName = $("repoNameInput").value.trim();
+  if (!name || !owner || !repositoryName) {
+    showBanner("Project name, owner, and repository are required.", true);
+    return;
+  }
+
+  const project = await api("/api/projects", {
+    method: "POST",
+    body: JSON.stringify({
+      workspaceId: state.selectedWorkspaceId,
+      name,
+      repositoryOwner: owner,
+      repositoryName,
+      defaultRegion: "westeurope",
+      currency: "EUR",
+      hoursPerMonth: 730
+    })
+  });
+  $("projectNameInput").value = "";
+  $("repoOwnerInput").value = "";
+  $("repoNameInput").value = "";
+  state.selectedProjectId = project.id;
+  showBanner(`Created project ${project.name}.`);
+  await loadProjects();
 }
 
 async function loadProjectDetail() {
@@ -118,7 +225,7 @@ async function loadProjectDetail() {
   state.analyses = await api(`/api/projects/${state.selectedProjectId}/analyses`);
   renderOverview();
   renderAnalyses();
-  await Promise.all([loadPolicies(), loadApprovals(), loadAudit()]);
+  await Promise.all([loadPolicies(), loadBudgets(), loadApprovals(), loadAudit()]);
 }
 
 async function loadAnalyses() {
@@ -144,6 +251,17 @@ async function loadPolicies() {
   const policy = await api(`/api/projects/${state.selectedProjectId}/policies`);
   $("policyEditor").value = policy.yaml;
   renderPolicyValidation(policy.parsed.errors || []);
+}
+
+async function loadBudgets() {
+  if (!state.selectedProjectId) {
+    state.budgets = [];
+    renderBudgets();
+    return;
+  }
+
+  state.budgets = await api(`/api/projects/${state.selectedProjectId}/budgets`);
+  renderBudgets();
 }
 
 async function loadApprovals() {
@@ -211,6 +329,31 @@ async function savePolicy() {
   showBanner("Policy saved.");
 }
 
+async function saveBudgets() {
+  if (!state.selectedProjectId) {
+    return;
+  }
+
+  const rows = Array.from(document.querySelectorAll("[data-budget-env]"));
+  for (const row of rows) {
+    const environment = row.dataset.budgetEnv;
+    await api(`/api/projects/${state.selectedProjectId}/budgets/${encodeURIComponent(environment)}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        environment,
+        maxMonthlyCost: readNumber(row.querySelector("[data-budget-cost]").value),
+        maxMonthlyDelta: readNumber(row.querySelector("[data-budget-delta]").value),
+        requireApprovalAbove: readNumber(row.querySelector("[data-budget-approval]").value),
+        currency: state.projectDetail?.project?.currency || "EUR",
+        blockOnBudgetExceeded: row.querySelector("[data-budget-block]").checked
+      })
+    });
+  }
+
+  showBanner("Budgets saved.");
+  await loadProjectDetail();
+}
+
 async function approveAnalysis(analysisId) {
   const reason = $(`reason-${analysisId}`).value.trim();
   if (!reason) {
@@ -259,9 +402,12 @@ function renderEmptyWorkspace() {
   $("metricDelta").textContent = "EUR 0.00";
   $("metricRisk").textContent = "0";
   $("metricRepo").textContent = "-";
+  $("repositoryBody").innerHTML = `<tr><td colspan="5">No repositories.</td></tr>`;
   $("latestAnalysesBody").innerHTML = `<tr><td colspan="9">No project available.</td></tr>`;
   $("analysesBody").innerHTML = "";
   $("analysisDetail").innerHTML = "";
+  state.budgets = [];
+  renderBudgets();
 }
 
 function renderOverview() {
@@ -275,9 +421,23 @@ function renderOverview() {
   $("metricPrs").textContent = metrics.totalPrsAnalyzed;
   $("metricDelta").textContent = formatMoney(metrics.totalMonthlyDeltaDetected, project.currency, true);
   $("metricRisk").textContent = metrics.warnedOrBlockedPrs;
-  $("metricRepo").textContent = `${project.repositoryOwner}/${project.repositoryName}`;
+  $("metricRepo").textContent = detail.repositories?.[0]?.fullName || `${project.repositoryOwner}/${project.repositoryName}`;
+  renderRepositories(detail.repositories || []);
   $("latestAnalysesBody").innerHTML = tableRows(metrics.latestAnalyses);
   showView(state.view);
+}
+
+function renderRepositories(repositories) {
+  $("repositoryBody").innerHTML = repositories.length === 0
+    ? `<tr><td colspan="5">No repositories.</td></tr>`
+    : repositories.map((repository) => `
+      <tr>
+        <td>${escapeHtml(repository.provider)}</td>
+        <td>${escapeHtml(repository.fullName)}</td>
+        <td>${escapeHtml(repository.defaultBranch || "-")}</td>
+        <td>${escapeHtml(repository.installationId || "-")}</td>
+        <td>${formatDate(repository.lastScanAt)}</td>
+      </tr>`).join("");
 }
 
 function renderAnalyses() {
@@ -319,6 +479,7 @@ function renderAnalysisDetail() {
     <div class="detail-actions">
       <span class="pill ${cssToken(analysis.status)}">${escapeHtml(analysis.status)}</span>
       <span class="pill ${cssToken(analysis.policyStatus)}">${humanPolicy(analysis.policyStatus)}</span>
+      <span class="pill">${escapeHtml(detail.analysisSource || "Unknown source")}</span>
       <button onclick="downloadCsv('${analysis.id}', 'resources')">Resources CSV</button>
       <button onclick="downloadCsv('${analysis.id}', 'policy-findings')">Findings CSV</button>
       <button onclick="downloadCsv('${analysis.id}', 'recommendations')">Recommendations CSV</button>
@@ -338,6 +499,8 @@ function renderAnalysisDetail() {
     ${analysis.errorMessage ? `<div class="status-banner error">Failure reason: ${escapeHtml(analysis.errorMessage)}</div>` : ""}
     ${renderCostChanges(detail.costChanges, analysis.currency)}
     ${renderResources(detail.resources, analysis.currency)}
+    ${renderArmMetadata(detail.resources, analysis.currency)}
+    ${renderPricingMetadata(detail.resources)}
     ${renderAssumptions(detail.assumptions)}
     ${renderPolicyEvaluations(detail.policyEvaluations)}
     ${renderFindings(detail.policyFindings)}
@@ -356,9 +519,9 @@ function renderCostChanges(changes, currency) {
   return `
     <h3>Cost Changes</h3>
     <div class="table-wrap"><table>
-      <thead><tr><th>Resource</th><th>Type</th><th>SKU</th><th>Delta</th></tr></thead>
+      <thead><tr><th>Resource</th><th>Type</th><th>Action</th><th>Before</th><th>After</th><th>Delta</th></tr></thead>
       <tbody>${changes.map((change) => `
-        <tr><td>${escapeHtml(change.resourceName)}</td><td>${escapeHtml(change.resourceType)}</td><td>${escapeHtml(change.beforeSku || "-")} -> ${escapeHtml(change.afterSku || "-")}</td><td>${formatMoney(change.monthlyDelta, currency, true)}</td></tr>`).join("")}</tbody>
+        <tr><td>${escapeHtml(change.terraformAddress || change.resourceName)}</td><td>${escapeHtml(change.resourceType)}</td><td>${escapeHtml(change.changeKind || "-")}</td><td>${escapeHtml(change.beforeSummary || change.beforeSku || "-")}</td><td>${escapeHtml(change.afterSummary || change.afterSku || "-")}</td><td>${formatMoney(change.monthlyDelta, currency, true)}</td></tr>`).join("")}</tbody>
     </table></div>`;
 }
 
@@ -370,10 +533,87 @@ function renderResources(resources, currency) {
   return `
     <h3>Resources</h3>
     <div class="table-wrap"><table>
-      <thead><tr><th>Name</th><th>Type</th><th>SKU</th><th>Env</th><th>Monthly</th><th>Status</th><th>Confidence</th></tr></thead>
+      <thead><tr><th>Name</th><th>Terraform</th><th>Action</th><th>Type</th><th>SKU</th><th>Region</th><th>Pricing</th><th>Env</th><th>Monthly</th><th>Status</th><th>Confidence</th></tr></thead>
       <tbody>${resources.map((resource) => `
-        <tr><td>${escapeHtml(resource.resourceName)}</td><td>${escapeHtml(resource.resourceType)}</td><td>${escapeHtml(resource.sku || "-")}</td><td>${escapeHtml(resource.environment || "-")}</td><td>${formatMoney(resource.monthlyCost, currency)}</td><td>${escapeHtml(resource.status)}</td><td>${escapeHtml(resource.confidence || "-")}</td></tr>`).join("")}</tbody>
+        <tr><td>${escapeHtml(resource.resourceName)}</td><td>${escapeHtml(resource.terraformAddress || "-")}</td><td>${escapeHtml(resource.terraformChangeType || resource.terraformActions || "-")}</td><td>${escapeHtml(resource.resourceType)}</td><td>${escapeHtml(resource.sku || resource.afterSummary || "-")}</td><td>${escapeHtml(resource.region || "-")}</td><td>${escapeHtml(resource.pricingMatchType || "-")}</td><td>${escapeHtml(resource.environment || "-")}</td><td>${formatMoney(resource.monthlyCost, currency)}</td><td>${escapeHtml(resource.status)}</td><td>${escapeHtml(resource.confidence || "-")}</td></tr>`).join("")}</tbody>
     </table></div>`;
+}
+
+function renderPricingMetadata(resources) {
+  const priced = (resources || []).filter((resource) => resource.pricingCatalogVersion || resource.pricingSource || resource.pricingMatchType);
+  if (priced.length === 0) {
+    return "";
+  }
+
+  const first = priced[0];
+  const matchTypes = [...new Set(priced.map((resource) => resource.pricingMatchType).filter(Boolean))].join(", ");
+  const fallback = priced.find((resource) => resource.pricingFallbackReason);
+  const ai = priced.find((resource) => resource.resourceType === "ai.workflow");
+  const unit = first.pricingUnitOfMeasure || first.pricingUnit || "-";
+  const liveApiUsed = priced.some((resource) => resource.pricingLiveApiUsed);
+  const fallbackUsed = priced.some((resource) => resource.pricingFallbackUsed);
+  return `
+    <h3>Pricing Metadata</h3>
+    <div class="list-panel">
+      <div><strong>Catalog</strong><br>${escapeHtml(first.pricingCatalogName || "-")} ${escapeHtml(first.pricingCatalogVersion || "")}</div>
+      <div><strong>Source</strong><br>${escapeHtml(first.pricingSourceType || first.pricingSource || "-")}</div>
+      <div><strong>Live API Used</strong><br>${liveApiUsed ? "yes" : "no"}</div>
+      <div><strong>Currency</strong><br>${escapeHtml(first.currency || "-")}</div>
+      <div><strong>Region</strong><br>${escapeHtml(first.region || "-")}</div>
+      <div><strong>Unit Price</strong><br>${first.pricingUnitPrice == null ? "-" : `${formatMoney(first.pricingUnitPrice, first.currency || "EUR")} / ${escapeHtml(unit)}`}</div>
+      <div><strong>Monthly Conversion</strong><br>${escapeHtml((first.pricingMonthlyHours || first.hoursPerMonth) ? `${first.pricingMonthlyHours || first.hoursPerMonth} hours/month` : unit)}</div>
+      <div><strong>Meter</strong><br>${escapeHtml(first.pricingMeterName || first.pricingMeterId || "-")}</div>
+      <div><strong>Product</strong><br>${escapeHtml(first.pricingProductName || "-")}</div>
+      <div><strong>SKU</strong><br>${escapeHtml(first.pricingArmSkuName || first.pricingSkuName || first.sku || "-")}</div>
+      <div><strong>Match Quality</strong><br>${escapeHtml(matchTypes || "-")}</div>
+      <div><strong>Fallback Used</strong><br>${fallbackUsed ? "yes" : "no"}</div>
+      ${first.pricingEffectiveStartDate ? `<div><strong>Effective Start</strong><br>${formatDate(first.pricingEffectiveStartDate)}</div>` : ""}
+      ${fallback ? `<div><strong>Fallback</strong><br>${escapeHtml(fallback.pricingFallbackReason)}</div>` : ""}
+      ${ai ? `<div><strong>AI Model Pricing</strong><br>${escapeHtml(ai.sku || "-")} - ${escapeHtml(ai.pricingUnit || "1M tokens")}</div>` : ""}
+    </div>`;
+}
+
+function renderArmMetadata(resources, currency) {
+  const arm = (resources || []).filter((resource) => resource.armResourceType || resource.analysisSource === "Bicep compiled ARM JSON");
+  if (arm.length === 0) {
+    return "";
+  }
+
+  return `
+    <h3>ARM / Bicep Details</h3>
+    <div class="list-panel">${arm.map((resource) => {
+      const raw = armRaw(resource);
+      const resolved = [...(raw.armParameterResolved || []), ...(raw.armVariableResolved || [])].join(", ");
+      const unresolved = (raw.armUnresolvedExpressions || []).map((item) => `${item.field}: ${item.expression}`).join("; ");
+      return `
+        <div>
+          <strong>${escapeHtml(resource.resourceName)}</strong><br>
+          Source ${escapeHtml(resource.sourceFile || "-")}<br>
+          ARM ${escapeHtml(resource.armResourceType || "-")} -> ${escapeHtml(resource.mappedResourceType || resource.resourceType || "-")}<br>
+          Location ${escapeHtml(resource.region || "-")} - SKU ${escapeHtml(resource.sku || "-")} - API ${escapeHtml(resource.armApiVersion || "-")} - Kind ${escapeHtml(resource.armKind || "-")}<br>
+          Monthly ${formatMoney(resource.monthlyCost, currency)} - Confidence ${escapeHtml(resource.confidence || "-")} - Pricing ${escapeHtml(resource.pricingSourceType || resource.pricingMatchType || "-")}
+          ${resolved ? `<br>Resolved ${escapeHtml(resolved)}` : ""}
+          ${unresolved ? `<br>Unresolved ${escapeHtml(unresolved)}` : ""}
+        </div>`;
+    }).join("")}</div>`;
+}
+
+function armRaw(resource) {
+  const outer = parseJson(resource.assumptionsJson);
+  const nested = parseJson(outer.AssumptionsJson || outer.assumptionsJson);
+  return outer.Raw || outer.raw || nested.Raw || nested.raw || {};
+}
+
+function parseJson(value) {
+  if (!value || typeof value !== "string") {
+    return {};
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
 }
 
 function renderFindings(findings) {
@@ -455,6 +695,29 @@ function renderPolicyValidation(errors) {
     : errors.map((error) => `<div>${escapeHtml(error)}</div>`).join("");
 }
 
+function renderBudgets() {
+  const defaults = ["dev", "staging", "production"];
+  const byEnvironment = new Map((state.budgets || []).map((budget) => [budget.environment, budget]));
+  const rows = [...new Set([...defaults, ...(state.budgets || []).map((budget) => budget.environment)])];
+  $("budgetRows").innerHTML = rows.map((environment) => {
+    const budget = byEnvironment.get(environment) || {
+      environment,
+      maxMonthlyCost: null,
+      maxMonthlyDelta: null,
+      requireApprovalAbove: null,
+      blockOnBudgetExceeded: environment === "production"
+    };
+    return `
+      <tr data-budget-env="${escapeHtml(environment)}">
+        <td>${escapeHtml(environment)}</td>
+        <td><input data-budget-cost type="number" min="0" step="1" value="${inputValue(budget.maxMonthlyCost)}"></td>
+        <td><input data-budget-delta type="number" min="0" step="1" value="${inputValue(budget.maxMonthlyDelta)}"></td>
+        <td><input data-budget-approval type="number" min="0" step="1" value="${inputValue(budget.requireApprovalAbove)}"></td>
+        <td><input data-budget-block type="checkbox" ${budget.blockOnBudgetExceeded ? "checked" : ""}></td>
+      </tr>`;
+  }).join("");
+}
+
 function renderApprovals() {
   const required = state.analyses.filter((analysis) => analysis.policyStatus === "ApprovalRequired");
   $("approvalRequiredList").innerHTML = required.length === 0
@@ -532,6 +795,15 @@ function shortSha(value) {
 
 function formatDate(value) {
   return value ? new Date(value).toLocaleString() : "-";
+}
+
+function readNumber(value) {
+  const trimmed = String(value || "").trim();
+  return trimmed ? Number(trimmed) : null;
+}
+
+function inputValue(value) {
+  return value === null || value === undefined ? "" : Number(value);
 }
 
 function escapeHtml(value) {

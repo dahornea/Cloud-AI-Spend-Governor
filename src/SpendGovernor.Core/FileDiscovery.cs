@@ -7,6 +7,7 @@ public static class FileDiscovery
         var normalized = path.Replace('\\', '/');
         var fileName = Path.GetFileName(normalized);
         var lower = normalized.ToLowerInvariant();
+        var lowerFileName = fileName.ToLowerInvariant();
         var kind = lower switch
         {
             ".spendgov.yml" => RelevantFileKind.SpendGovConfig,
@@ -17,6 +18,8 @@ public static class FileDiscovery
             _ when fileName.Equals(".spendgov.yaml", StringComparison.OrdinalIgnoreCase) => RelevantFileKind.SpendGovConfig,
             _ when fileName.Equals("ai-spend.yml", StringComparison.OrdinalIgnoreCase) => RelevantFileKind.AiSpendConfig,
             _ when fileName.Equals("ai-spend.yaml", StringComparison.OrdinalIgnoreCase) => RelevantFileKind.AiSpendConfig,
+            _ when IsTerraformPlanJsonPath(lower, lowerFileName) => RelevantFileKind.TerraformPlanJson,
+            _ when IsArmTemplateJsonPath(lower, lowerFileName) => RelevantFileKind.ArmTemplateJson,
             _ when lower.EndsWith(".tfvars", StringComparison.Ordinal) => RelevantFileKind.TerraformVars,
             _ when lower.EndsWith(".tf", StringComparison.Ordinal) => RelevantFileKind.Terraform,
             _ when lower.EndsWith(".bicepparam", StringComparison.Ordinal) => RelevantFileKind.BicepParam,
@@ -25,6 +28,56 @@ public static class FileDiscovery
         };
 
         return new DetectedFile(normalized, kind);
+    }
+
+    public static bool IsTerraformPlanJsonPath(string path)
+    {
+        var normalized = path.Replace('\\', '/').ToLowerInvariant();
+        return IsTerraformPlanJsonPath(normalized, Path.GetFileName(normalized));
+    }
+
+    private static bool IsTerraformPlanJsonPath(string lowerPath, string lowerFileName)
+    {
+        if (lowerFileName is not ("tfplan.json" or "terraform-plan.json" or "plan.json"))
+        {
+            return false;
+        }
+
+        var folder = lowerPath.Contains('/', StringComparison.Ordinal)
+            ? lowerPath[..lowerPath.LastIndexOf('/')]
+            : "";
+        if (string.IsNullOrWhiteSpace(folder))
+        {
+            return true;
+        }
+
+        var firstSegment = folder.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        return firstSegment is "infra" or "infrastructure" or "terraform" or ".iac";
+    }
+
+    public static bool IsArmTemplateJsonPath(string path)
+    {
+        var normalized = path.Replace('\\', '/').ToLowerInvariant();
+        return IsArmTemplateJsonPath(normalized, Path.GetFileName(normalized));
+    }
+
+    private static bool IsArmTemplateJsonPath(string lowerPath, string lowerFileName)
+    {
+        if (lowerFileName is not ("main.json" or "azuredeploy.json" or "arm-template.json" or "template.json" or "bicep-output.json" or "compiled-arm.json"))
+        {
+            return false;
+        }
+
+        var folder = lowerPath.Contains('/', StringComparison.Ordinal)
+            ? lowerPath[..lowerPath.LastIndexOf('/')]
+            : "";
+        if (string.IsNullOrWhiteSpace(folder))
+        {
+            return true;
+        }
+
+        var firstSegment = folder.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        return firstSegment is "infra" or "infrastructure" or "bicep" or "azure" or "iac" or ".iac";
     }
 
     public static IReadOnlyList<DetectedFile> DetectMany(IEnumerable<string> paths)

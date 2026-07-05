@@ -5,6 +5,8 @@ namespace SpendGovernor.Core;
 public sealed class AnalysisEngine
 {
     private readonly TerraformParser terraformParser = new();
+    private readonly TerraformPlanJsonParser terraformPlanJsonParser = new();
+    private readonly ArmTemplateJsonParser armTemplateJsonParser = new();
     private readonly BicepParser bicepParser = new();
     private readonly AiSpendParser aiSpendParser = new();
     private readonly MonthlyCostEstimator estimator;
@@ -60,7 +62,13 @@ public sealed class AnalysisEngine
 
         try
         {
-            var proposedConfigYaml = FindSpendGovYaml(request.ProposedFiles) ?? request.Settings.PolicyYaml;
+            var repositoryConfigYaml = FindSpendGovYaml(request.ProposedFiles);
+            var proposedConfigYaml = repositoryConfigYaml ?? request.Settings.PolicyYaml;
+            analysis.BudgetSource = repositoryConfigYaml is not null
+                ? "SpendGovYaml"
+                : proposedConfigYaml.Contains("BudgetSource: DatabaseProjectEnvironmentBudget", StringComparison.OrdinalIgnoreCase)
+                    ? "DatabaseProjectEnvironmentBudget"
+                    : "DefaultFallback";
             var configResult = SpendGovConfigParser.Parse(proposedConfigYaml, request.Settings);
             var config = configResult.Config;
             analysis.Currency = config.Currency;
@@ -74,11 +82,19 @@ public sealed class AnalysisEngine
                 PolicyYaml = proposedConfigYaml ?? PolicyConfig.DefaultYaml
             };
 
-            var baselineResources = AnalyzeRepositoryFiles(request.BaselineFiles, analysis.Id, effectiveSettings, request.BaseBranch);
-            var proposedResources = AnalyzeRepositoryFiles(request.ProposedFiles, analysis.Id, effectiveSettings, request.HeadBranch);
-            var changes = CalculateChanges(baselineResources, proposedResources);
+            var repositoryAnalysis = AnalyzeRepositoryInputs(
+                request.BaselineFiles,
+                request.ProposedFiles,
+                analysis.Id,
+                effectiveSettings,
+                request.BaseBranch,
+                request.HeadBranch);
+            var baselineResources = repositoryAnalysis.BaselineResources;
+            var proposedResources = repositoryAnalysis.ProposedResources;
+            var changes = repositoryAnalysis.CostChanges ?? CalculateChanges(baselineResources, proposedResources);
             var validationErrors = configResult.Errors
                 .Concat(aiSpendParser.Validate(aiSpendParser.Parse(request.ProposedFiles)))
+                .Concat(repositoryAnalysis.Diagnostics)
                 .ToArray();
 
             var baselineCost = baselineResources.Sum(resource => resource.MonthlyCost ?? 0);
@@ -277,6 +293,93 @@ public sealed class AnalysisEngine
         return cloudEstimates.Concat(aiEstimates).ToArray();
     }
 
+    private RepositoryAnalysisOutput AnalyzeRepositoryInputs(
+        IReadOnlyList<RepositoryFile> baselineFiles,
+        IReadOnlyList<RepositoryFile> proposedFiles,
+        Guid analysisId,
+        ProjectSettings settings,
+        string baseBranch,
+        string headBranch)
+    {
+        var terraformPlan = terraformPlanJsonParser.Parse(proposedFiles, settings.DefaultRegion, settings.HoursPerMonth, headBranch);
+        var diagnostics = terraformPlan.Errors.Concat(terraformPlan.Warnings).ToArray();
+        if (!terraformPlan.HasCostRelevantChanges)
+        {
+            var proposedArmTemplate = armTemplateJsonParser.Parse(proposedFiles, settings.DefaultRegion, settings.HoursPerMonth, headBranch);
+            var baselineArmTemplate = armTemplateJsonParser.Parse(baselineFiles, settings.DefaultRegion, settings.HoursPerMonth, baseBranch);
+            diagnostics = diagnostics
+                .Concat(proposedArmTemplate.Errors)
+                .Concat(proposedArmTemplate.Warnings)
+                .Concat(baselineArmTemplate.Errors)
+                .Concat(baselineArmTemplate.Warnings)
+                .ToArray();
+
+            if (proposedArmTemplate.HasCostRelevantResources)
+            {
+                var armBaselineCloudEstimates = estimator.EstimateCloudResources(baselineArmTemplate.Resources, analysisId, settings.Currency);
+                var armProposedCloudEstimates = estimator.EstimateCloudResources(proposedArmTemplate.Resources, analysisId, settings.Currency);
+                var armBaselineAiEstimates = estimator.EstimateAiWorkflows(aiSpendParser.Parse(baselineFiles), analysisId, settings.Currency);
+                var armProposedAiEstimates = estimator.EstimateAiWorkflows(aiSpendParser.Parse(proposedFiles), analysisId, settings.Currency);
+                var armBaselineResources = armBaselineCloudEstimates.Concat(armBaselineAiEstimates).ToArray();
+                var armProposedResources = armProposedCloudEstimates.Concat(armProposedAiEstimates).ToArray();
+
+                return new RepositoryAnalysisOutput
+                {
+                    BaselineResources = armBaselineResources,
+                    ProposedResources = armProposedResources,
+                    CostChanges = CalculateChanges(armBaselineResources, armProposedResources),
+                    Diagnostics = diagnostics,
+                    UsedArmTemplateJson = true
+                };
+            }
+
+            return new RepositoryAnalysisOutput
+            {
+                BaselineResources = AnalyzeRepositoryFiles(baselineFiles, analysisId, settings, baseBranch),
+                ProposedResources = AnalyzeRepositoryFiles(proposedFiles, analysisId, settings, headBranch),
+                Diagnostics = diagnostics
+            };
+        }
+
+        var baselineCloudInputs = terraformPlan.BeforeResources
+            .Concat(bicepParser.Parse(baselineFiles, settings.DefaultRegion, settings.HoursPerMonth, baseBranch))
+            .ToArray();
+        var proposedCloudInputs = terraformPlan.AfterResources
+            .Concat(bicepParser.Parse(proposedFiles, settings.DefaultRegion, settings.HoursPerMonth, headBranch))
+            .ToArray();
+
+        var baselineCloudEstimates = estimator.EstimateCloudResources(baselineCloudInputs, analysisId, settings.Currency);
+        var proposedCloudEstimates = IncludeRemovedTerraformPlanResources(
+            estimator.EstimateCloudResources(proposedCloudInputs, analysisId, settings.Currency),
+            baselineCloudEstimates,
+            terraformPlan.ChangeHints,
+            analysisId,
+            settings.Currency);
+
+        var baselineAiEstimates = estimator.EstimateAiWorkflows(aiSpendParser.Parse(baselineFiles), analysisId, settings.Currency);
+        var proposedAiEstimates = estimator.EstimateAiWorkflows(aiSpendParser.Parse(proposedFiles), analysisId, settings.Currency);
+        var baselineResources = baselineCloudEstimates.Concat(baselineAiEstimates).ToArray();
+        var proposedResources = proposedCloudEstimates.Concat(proposedAiEstimates).ToArray();
+
+        var planChanges = CalculateTerraformPlanChanges(terraformPlan.ChangeHints, baselineResources, proposedResources);
+        var planKeys = terraformPlan.ChangeHints.Select(hint => hint.ResourceKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var fallbackChanges = CalculateChanges(baselineResources, proposedResources)
+            .Where(change => !planKeys.Contains(change.ResourceKey));
+        var changes = planChanges
+            .Concat(fallbackChanges)
+            .OrderByDescending(change => Math.Abs(change.MonthlyDelta))
+            .ToArray();
+
+        return new RepositoryAnalysisOutput
+        {
+            BaselineResources = baselineResources,
+            ProposedResources = proposedResources,
+            CostChanges = changes,
+            Diagnostics = diagnostics,
+            UsedTerraformPlanJson = true
+        };
+    }
+
     private static IReadOnlyList<ResourceCostChange> CalculateChanges(
         IReadOnlyList<ResourceEstimate> baselineResources,
         IReadOnlyList<ResourceEstimate> proposedResources)
@@ -308,8 +411,15 @@ public sealed class AnalysisEngine
                 Region = after?.Region ?? before?.Region,
                 BeforeSku = before?.Sku,
                 AfterSku = after?.Sku,
+                BeforeSummary = before?.Sku,
+                AfterSummary = after?.Sku,
                 MonthlyDelta = delta,
-                ChangeKind = before is null ? "added" : after is null ? "removed" : "changed"
+                ChangeKind = before is null ? "added" : after is null ? "removed" : "changed",
+                Reason = before is null
+                    ? $"New {after?.ResourceType ?? "resource"} detected."
+                    : after is null
+                        ? $"{before.ResourceType} removed."
+                        : $"{before.Sku ?? "unknown"} -> {after.Sku ?? "unknown"}"
             });
         }
 
@@ -319,6 +429,158 @@ public sealed class AnalysisEngine
     private static string ResourceKey(ResourceEstimate resource)
     {
         return $"{resource.Provider}:{resource.ResourceType}:{resource.ResourceName}";
+    }
+
+    private static IReadOnlyList<ResourceEstimate> IncludeRemovedTerraformPlanResources(
+        IReadOnlyList<ResourceEstimate> proposedResources,
+        IReadOnlyList<ResourceEstimate> baselineResources,
+        IReadOnlyList<TerraformPlanChangeHint> hints,
+        Guid analysisId,
+        string currency)
+    {
+        var resources = proposedResources.ToList();
+        var proposedKeys = resources.Select(ResourceKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var hint in hints.Where(hint => hint.ChangeKind.Equals("removed", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (proposedKeys.Contains(hint.ResourceKey))
+            {
+                continue;
+            }
+
+            var before = baselineResources.FirstOrDefault(resource => ResourceKey(resource).Equals(hint.ResourceKey, StringComparison.OrdinalIgnoreCase));
+            if (before is null)
+            {
+                resources.Add(new ResourceEstimate
+                {
+                    AnalysisId = analysisId,
+                    SourceType = ResourceSourceType.Terraform,
+                    SourceFile = hint.SourceFile,
+                    Provider = hint.Provider,
+                    ResourceType = hint.ResourceType,
+                    ResourceName = hint.ResourceName,
+                    Region = hint.Region,
+                    Sku = hint.BeforeSku,
+                    AnalysisSource = TerraformPlanJsonParser.AnalysisSource,
+                    TerraformAddress = hint.TerraformAddress,
+                    TerraformActions = hint.TerraformActions,
+                    TerraformChangeType = "delete",
+                    BeforeSummary = hint.BeforeSummary,
+                    AfterSummary = hint.AfterSummary,
+                    Currency = currency,
+                    MonthlyCost = 0,
+                    MonthlyDelta = 0,
+                    Status = EstimateStatus.Unknown,
+                    Confidence = ConfidenceLevel.Low,
+                    AssumptionsJson = JsonSerializer.Serialize(new
+                    {
+                        AnalysisSource = TerraformPlanJsonParser.AnalysisSource,
+                        hint.TerraformAddress,
+                        hint.TerraformActions,
+                        hint.BeforeSummary,
+                        hint.AfterSummary
+                    })
+                });
+                continue;
+            }
+
+            var removed = new ResourceEstimate
+            {
+                AnalysisId = before.AnalysisId,
+                SourceType = before.SourceType,
+                SourceFile = before.SourceFile,
+                Provider = before.Provider,
+                ResourceType = before.ResourceType,
+                ResourceName = before.ResourceName,
+                Region = before.Region,
+                Sku = before.Sku,
+                Tier = before.Tier,
+                AnalysisSource = TerraformPlanJsonParser.AnalysisSource,
+                TerraformAddress = hint.TerraformAddress ?? before.TerraformAddress,
+                TerraformActions = hint.TerraformActions ?? before.TerraformActions,
+                TerraformChangeType = "delete",
+                BeforeSummary = hint.BeforeSummary ?? before.BeforeSummary,
+                AfterSummary = hint.AfterSummary,
+                Environment = before.Environment,
+                Category = before.Category,
+                MonthlyCost = 0,
+                MonthlyDelta = decimal.Round(0 - (before.MonthlyCost ?? 0), 2),
+                Currency = before.Currency,
+                Confidence = before.Confidence,
+                Status = before.Status == EstimateStatus.Estimated ? EstimateStatus.Estimated : EstimateStatus.Unknown,
+                Quantity = 0,
+                HoursPerMonth = before.HoursPerMonth,
+                AssumptionsJson = before.AssumptionsJson,
+                PriceSource = before.PriceSource,
+                PriceLastUpdated = before.PriceLastUpdated,
+                PricingCatalogName = before.PricingCatalogName,
+                PricingCatalogVersion = before.PricingCatalogVersion,
+                PricingSource = before.PricingSource,
+                PricingSourceType = before.PricingSourceType,
+                PricingMatchType = before.PricingMatchType,
+                PricingFallbackReason = before.PricingFallbackReason,
+                PricingUnit = before.PricingUnit,
+                PricingUnitPrice = before.PricingUnitPrice,
+                PricingMatchedKey = before.PricingMatchedKey,
+                PricingConfidenceImpact = before.PricingConfidenceImpact,
+                PricingLiveApiUsed = before.PricingLiveApiUsed,
+                PricingFallbackUsed = before.PricingFallbackUsed,
+                PricingRegionDefaulted = before.PricingRegionDefaulted,
+                PricingAmbiguousMatch = before.PricingAmbiguousMatch,
+                PricingMonthlyHours = before.PricingMonthlyHours,
+                PricingUnitOfMeasure = before.PricingUnitOfMeasure,
+                PricingMeterId = before.PricingMeterId,
+                PricingMeterName = before.PricingMeterName,
+                PricingProductName = before.PricingProductName,
+                PricingSkuName = before.PricingSkuName,
+                PricingArmSkuName = before.PricingArmSkuName,
+                PricingServiceName = before.PricingServiceName,
+                PricingServiceFamily = before.PricingServiceFamily,
+                PricingPriceType = before.PricingPriceType,
+                PricingEffectiveStartDate = before.PricingEffectiveStartDate
+            };
+            removed.Warnings.AddRange(before.Warnings);
+            removed.Warnings.Add("Resource removed by Terraform plan JSON.");
+            resources.Add(removed);
+        }
+
+        return resources;
+    }
+
+    private static IReadOnlyList<ResourceCostChange> CalculateTerraformPlanChanges(
+        IReadOnlyList<TerraformPlanChangeHint> hints,
+        IReadOnlyList<ResourceEstimate> baselineResources,
+        IReadOnlyList<ResourceEstimate> proposedResources)
+    {
+        var changes = new List<ResourceCostChange>();
+        foreach (var hint in hints)
+        {
+            var before = baselineResources.FirstOrDefault(resource => ResourceKey(resource).Equals(hint.ResourceKey, StringComparison.OrdinalIgnoreCase));
+            var after = proposedResources.FirstOrDefault(resource => ResourceKey(resource).Equals(hint.ResourceKey, StringComparison.OrdinalIgnoreCase));
+            var beforeCost = before?.MonthlyCost ?? 0;
+            var afterCost = after?.MonthlyCost ?? 0;
+            var delta = hint.ChangeKind.Equals("removed", StringComparison.OrdinalIgnoreCase)
+                ? decimal.Round(0 - beforeCost, 2)
+                : decimal.Round(afterCost - beforeCost, 2);
+
+            changes.Add(new ResourceCostChange
+            {
+                ResourceKey = hint.ResourceKey,
+                ResourceName = hint.ResourceName,
+                ResourceType = hint.ResourceType,
+                Region = after?.Region ?? before?.Region ?? hint.Region,
+                BeforeSku = before?.Sku ?? hint.BeforeSku,
+                AfterSku = hint.ChangeKind.Equals("removed", StringComparison.OrdinalIgnoreCase) ? null : after?.Sku ?? hint.AfterSku,
+                BeforeSummary = hint.BeforeSummary ?? before?.BeforeSummary ?? before?.Sku,
+                AfterSummary = hint.AfterSummary ?? after?.AfterSummary ?? after?.Sku,
+                TerraformAddress = hint.TerraformAddress,
+                TerraformActions = hint.TerraformActions,
+                Reason = hint.Reason,
+                MonthlyDelta = delta,
+                ChangeKind = hint.ChangeKind
+            });
+        }
+
+        return changes.OrderByDescending(change => Math.Abs(change.MonthlyDelta)).ToArray();
     }
 
     private static string? FindSpendGovYaml(IEnumerable<RepositoryFile> files)
@@ -336,5 +598,15 @@ public sealed class AnalysisEngine
             Message = message,
             MetadataJson = metadata is null ? "{}" : JsonSerializer.Serialize(metadata)
         };
+    }
+
+    private sealed class RepositoryAnalysisOutput
+    {
+        public IReadOnlyList<ResourceEstimate> BaselineResources { get; init; } = [];
+        public IReadOnlyList<ResourceEstimate> ProposedResources { get; init; } = [];
+        public IReadOnlyList<ResourceCostChange>? CostChanges { get; init; }
+        public IReadOnlyList<string> Diagnostics { get; init; } = [];
+        public bool UsedTerraformPlanJson { get; init; }
+        public bool UsedArmTemplateJson { get; init; }
     }
 }

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Net;
 using Microsoft.Extensions.Options;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -16,6 +17,33 @@ var tests = new List<(string Name, Action Test)>
     ("Scenario 5 - Expensive AI workflow triggers policy", ScenarioExpensiveAiWorkflow),
     ("Scenario 6 - Staging budget requires approval", ScenarioApprovalRequired),
     ("Resource coverage - MVP estimates five Azure resource shapes", ScenarioResourceCoverage),
+    ("Pricing Catalog v2 loads Azure and AI catalogs", ScenarioPricingCatalogLoadsAndValidates),
+    ("Pricing Catalog v2 matches exact and fallback prices", ScenarioPricingCatalogMatchTypes),
+    ("Pricing Catalog v2 calculates AI monthly token costs", ScenarioPricingCatalogAiTokenCost),
+    ("Pricing Catalog v2 match quality affects confidence", ScenarioPricingCatalogConfidenceImpact),
+    ("Pricing Catalog v2 metadata appears in assumptions and PR markdown", ScenarioPricingCatalogReportMetadata),
+    ("Pricing Catalog v2 invalid catalog validation fails", ScenarioPricingCatalogInvalidValidation),
+    ("Azure Retail Prices API client builds query and paginates", () => ScenarioAzureRetailClientBuildsQueryAndPaginates().GetAwaiter().GetResult()),
+    ("Azure Retail Prices API client handles failures", () => ScenarioAzureRetailClientHandlesFailures().GetAwaiter().GetResult()),
+    ("Azure Retail provider matches exact hourly price", () => ScenarioAzureRetailProviderExactHourly().GetAwaiter().GetResult()),
+    ("Azure Retail provider handles GB-month and ambiguous matches", () => ScenarioAzureRetailProviderGbMonthAndAmbiguous().GetAwaiter().GetResult()),
+    ("Azure Retail hybrid falls back to local catalog", ScenarioAzureRetailHybridFallback),
+    ("Azure Retail metadata appears in reports and dashboard", () => ScenarioAzureRetailMetadataReportAndDashboard().GetAwaiter().GetResult()),
+    ("Azure Retail region normalization and candidate mapping", ScenarioAzureRetailRegionAndMapping),
+    ("Terraform plan JSON files are detected", ScenarioTerraformPlanJsonDetection),
+    ("Terraform plan JSON parser maps resource actions", ScenarioTerraformPlanJsonActionMapping),
+    ("Terraform plan JSON parser extracts Azure pricing fields", ScenarioTerraformPlanJsonAzureExtraction),
+    ("Terraform plan JSON creates cost breakdowns and PR source text", ScenarioTerraformPlanJsonEngineFlow),
+    ("Terraform plan JSON modified SKU shows before and after values", ScenarioTerraformPlanJsonSkuUpgrade),
+    ("Terraform plan JSON removed resources produce negative deltas", ScenarioTerraformPlanJsonRemovedResource),
+    ("Terraform plan JSON unknown resources do not crash", ScenarioTerraformPlanJsonUnknownResource),
+    ("Terraform plan JSON invalid input becomes a warning", ScenarioTerraformPlanJsonInvalidInput),
+    ("ARM template JSON files are detected and unrelated JSON is rejected", ScenarioArmTemplateJsonDetection),
+    ("ARM template JSON parser extracts and maps Azure resources", ScenarioArmTemplateJsonExtraction),
+    ("ARM template JSON resolves simple parameters and variables", ScenarioArmTemplateJsonExpressionHandling),
+    ("ARM template JSON creates cost breakdowns and PR source text", ScenarioArmTemplateJsonEngineFlow),
+    ("ARM template JSON invalid and empty inputs do not crash", ScenarioArmTemplateJsonInvalidAndEmptyInput),
+    ("ARM template JSON metadata persists for dashboard details", () => ScenarioArmTemplateJsonPersistence().GetAwaiter().GetResult()),
     (".spendgov.yml validation reports actionable errors", ScenarioPolicyValidation),
     ("Confidence scoring downgrades defaulted region", ScenarioConfidenceScoring),
     ("PR comment uses beta report format", ScenarioPrCommentFormatting),
@@ -30,11 +58,18 @@ var tests = new List<(string Name, Action Test)>
     ("Persistence creates repository records", () => ScenarioRepositoryPersistence().GetAwaiter().GetResult()),
     ("Persistence creates pull request scans", () => ScenarioCreateScanPersistence().GetAwaiter().GetResult()),
     ("Persistence updates scan from queued to running", () => ScenarioRunningScanPersistence().GetAwaiter().GetResult()),
+    ("Background scan queue round-trips jobs", () => ScenarioBackgroundScanQueueRoundTrips().GetAwaiter().GetResult()),
     ("Persistence marks completed scans and saves child rows", () => ScenarioCompletedScanPersistence().GetAwaiter().GetResult()),
     ("Persistence marks failed scans with failure reason", () => ScenarioFailedScanPersistence().GetAwaiter().GetResult()),
+    ("Persistence maps pricing metadata for dashboard details", () => ScenarioPricingCatalogDashboardPersistence().GetAwaiter().GetResult()),
+    ("Persistence saves Terraform plan metadata for dashboard details", () => ScenarioTerraformPlanJsonPersistence().GetAwaiter().GetResult()),
     ("Persistence saves GitHub publishing metadata", () => ScenarioGitHubPublishingMetadataPersistence().GetAwaiter().GetResult()),
     ("Persistence keeps scan result when GitHub publishing fails", () => ScenarioGitHubPublishFailureDoesNotLoseScan().GetAwaiter().GetResult()),
-    ("Persistence retrieves dashboard scans, details, and GitHub comment id", () => ScenarioDashboardPersistenceQueries().GetAwaiter().GetResult())
+    ("Persistence retrieves dashboard scans, details, and GitHub comment id", () => ScenarioDashboardPersistenceQueries().GetAwaiter().GetResult()),
+    ("Private beta model persists users, workspaces, projects, and budgets", () => ScenarioPrivateBetaModelPersistence().GetAwaiter().GetResult()),
+    ("Private beta repositories are scoped by project", () => ScenarioProjectScopedRepositoryPersistence().GetAwaiter().GetResult()),
+    ("Private beta scoping blocks cross-workspace access", () => ScenarioPrivateBetaCrossWorkspaceScoping().GetAwaiter().GetResult()),
+    ("Private beta members are view-only", () => ScenarioPrivateBetaMemberIsViewOnly().GetAwaiter().GetResult())
 };
 
 var failures = 0;
@@ -61,9 +96,9 @@ if (failures > 0)
 
 Console.WriteLine("All MVP scenario tests passed.");
 
-static AnalysisEngine CreateEngine()
+static AnalysisEngine CreateEngine(IPricingCatalogService? pricingCatalogService = null)
 {
-    return new AnalysisEngine(new MonthlyCostEstimator(new SeededAzurePricingAdapter(), new AiModelPriceCatalog()));
+    return new AnalysisEngine(new MonthlyCostEstimator(pricingCatalogService ?? JsonPricingCatalogService.LoadDefault()));
 }
 
 static ProjectSettings Settings(string? yaml = null)
@@ -215,6 +250,7 @@ static void ScenarioExpensiveAiWorkflow()
     var result = CreateEngine().Analyze(Request(["ai-spend.yml"], [], [new RepositoryFile("ai-spend.yml", workflow)], pr: 5));
     var ai = result.ProposedResources.Single(resource => resource.Category == CostCategory.Ai);
     Assert(ai.MonthlyCost > 300, "Expected AI workflow cost above budget.");
+    Assert(ai.Confidence == ConfidenceLevel.Medium, $"Expected AI workflow confidence to be medium, got {ai.Confidence}.");
     Assert(PolicyEngine.Severity(result.Analysis.PolicyStatus) >= PolicyEngine.Severity(PolicyAction.Warn), "Expected AI policy to warn or block.");
     Assert(result.PolicyFindings.Any(finding => finding.RuleId.StartsWith("ai-", StringComparison.OrdinalIgnoreCase)), "Expected AI policy finding.");
     Assert(result.CommentMarkdown.Contains("AI spend", StringComparison.OrdinalIgnoreCase), "Expected AI section in PR comment.");
@@ -304,6 +340,707 @@ static void ScenarioResourceCoverage()
 
     var estimatedCount = result.ProposedResources.Count(resource => resource.Status == EstimateStatus.Estimated);
     Assert(estimatedCount >= 5, $"Expected at least five estimated Azure resources, got {estimatedCount}.");
+}
+
+static void ScenarioPricingCatalogLoadsAndValidates()
+{
+    var service = JsonPricingCatalogService.LoadDefault();
+    var validation = service.Validate();
+
+    Assert(validation.IsValid, "Expected default pricing catalogs to validate.");
+    Assert(service.EstimateMonthlyCost(new PricingLookupRequest
+    {
+        Provider = "azure",
+        ResourceType = "azurerm_service_plan",
+        ResourceName = "api",
+        Sku = "P1v3",
+        Region = "westeurope",
+        Currency = "EUR"
+    }).CatalogVersion == "2026.07.01", "Expected Azure catalog version 2026.07.01.");
+    Assert(service.EstimateAiMonthlyCost(new AiPricingLookupRequest
+    {
+        Provider = "openai",
+        Model = "gpt-4.1",
+        WorkflowId = "wf",
+        EstimatedRunsPerMonth = 1,
+        AverageInputTokens = 1,
+        AverageOutputTokens = 1,
+        Currency = "EUR"
+    }).CatalogName == "Local AI MVP Catalog", "Expected AI pricing catalog to load.");
+}
+
+static void ScenarioPricingCatalogMatchTypes()
+{
+    var service = JsonPricingCatalogService.LoadDefault();
+    var exact = service.EstimateMonthlyCost(new PricingLookupRequest
+    {
+        Provider = "azure",
+        ResourceType = "azurerm_service_plan",
+        ResourceName = "api",
+        Sku = "P1v3",
+        Region = "westeurope",
+        Currency = "EUR"
+    });
+    var defaultRegion = service.EstimateMonthlyCost(new PricingLookupRequest
+    {
+        Provider = "azure",
+        ResourceType = "azurerm_service_plan",
+        ResourceName = "api",
+        Sku = "P1v3",
+        Region = "northeurope",
+        Currency = "EUR"
+    });
+    var resourceFallback = service.EstimateMonthlyCost(new PricingLookupRequest
+    {
+        Provider = "azure",
+        ResourceType = "azurerm_container_app",
+        ResourceName = "jobs",
+        Region = "northeurope",
+        Currency = "EUR"
+    });
+    var unknown = service.EstimateMonthlyCost(new PricingLookupRequest
+    {
+        Provider = "azure",
+        ResourceType = "azurerm_totally_unknown",
+        ResourceName = "mystery",
+        Sku = "unknown",
+        Region = "westeurope",
+        Currency = "EUR"
+    });
+
+    Assert(exact.MatchType == PricingMatchType.ExactRegionSkuMatch, $"Expected exact region SKU match, got {exact.MatchType}.");
+    Assert(exact.EstimatedMonthlyCost > 200, "Expected P1v3 monthly estimate.");
+    Assert(defaultRegion.MatchType == PricingMatchType.DefaultRegionSkuMatch, $"Expected default region fallback, got {defaultRegion.MatchType}.");
+    Assert(!string.IsNullOrWhiteSpace(defaultRegion.FallbackReason), "Expected fallback reason.");
+    Assert(resourceFallback.MatchType == PricingMatchType.ResourceTypeFallback, $"Expected resource type fallback, got {resourceFallback.MatchType}.");
+    Assert(unknown.MatchType == PricingMatchType.ProviderFallback, $"Expected provider fallback, got {unknown.MatchType}.");
+}
+
+static void ScenarioPricingCatalogAiTokenCost()
+{
+    var service = JsonPricingCatalogService.LoadDefault();
+    var match = service.EstimateAiMonthlyCost(new AiPricingLookupRequest
+    {
+        Provider = "openai",
+        Model = "gpt-4.1",
+        WorkflowId = "sales-agent",
+        EstimatedRunsPerMonth = 10_000,
+        AverageInputTokens = 8_000,
+        AverageOutputTokens = 2_000,
+        Currency = "EUR"
+    });
+
+    Assert(match.Matched, "Expected AI model price match.");
+    Assert(match.EstimatedMonthlyCost == 320.00m, $"Expected 320 EUR monthly AI cost, got {match.EstimatedMonthlyCost}.");
+    Assert(match.InputPricePerMillionTokens == 2.0m, "Expected input token price in match.");
+    Assert(match.OutputPricePerMillionTokens == 8.0m, "Expected output token price in match.");
+}
+
+static void ScenarioPricingCatalogConfidenceImpact()
+{
+    const string proposed =
+        """
+        resource "azurerm_service_plan" "api" {
+          name     = "api-plan"
+          location = "northeurope"
+          os_type  = "Linux"
+          sku_name = "P1v3"
+        }
+        """;
+
+    var result = CreateEngine().Analyze(Request(["main.tf"], [], [new RepositoryFile("main.tf", proposed)], pr: 30));
+    var resource = result.ProposedResources.Single();
+
+    Assert(resource.PricingMatchType == PricingMatchType.DefaultRegionSkuMatch.ToString(), $"Expected default region pricing match, got {resource.PricingMatchType}.");
+    Assert(resource.Confidence == ConfidenceLevel.Medium, $"Expected default region fallback to lower confidence to medium, got {resource.Confidence}.");
+}
+
+static void ScenarioPricingCatalogReportMetadata()
+{
+    const string proposed =
+        """
+        resource "azurerm_service_plan" "api" {
+          name     = "api-plan"
+          location = "westeurope"
+          os_type  = "Linux"
+          sku_name = "P1v3"
+        }
+        """;
+
+    var result = CreateEngine().Analyze(Request(["main.tf"], [], [new RepositoryFile("main.tf", proposed)], pr: 31));
+
+    Assert(result.ProposedResources.Single().PricingCatalogVersion == "2026.07.01", "Expected resource pricing catalog version.");
+    Assert(result.CommentMarkdown.Contains("### Pricing metadata", StringComparison.Ordinal), "Expected pricing metadata section.");
+    Assert(result.CommentMarkdown.Contains("Catalog version: 2026.07.01", StringComparison.Ordinal), "Expected catalog version in PR markdown.");
+    Assert(result.CommentMarkdown.Contains("ExactRegionSkuMatch", StringComparison.Ordinal), "Expected match quality in PR markdown.");
+}
+
+static void ScenarioPricingCatalogInvalidValidation()
+{
+    var invalidAzure = new PricingCatalog
+    {
+        Provider = "Azure",
+        Name = "Invalid",
+        Currency = "EUR",
+        Items =
+        [
+            new PricingCatalogItem { Provider = "azure", ResourceType = "azurerm_service_plan", Sku = "B1", Region = "westeurope", Currency = "EUR", Unit = "hour", UnitPrice = -1 }
+        ]
+    };
+    var invalidAi = new PricingCatalog
+    {
+        Provider = "AI",
+        Name = "Invalid AI",
+        Version = "2026.07.01",
+        Currency = "EUR",
+        Items =
+        [
+            new PricingCatalogItem { Provider = "openai", ResourceType = "ai.workflow", Sku = "gpt-4.1", Currency = "EUR", Unit = "1M tokens", InputPricePerMillionTokens = 1 }
+        ]
+    };
+
+    var failed = false;
+    try
+    {
+        _ = new JsonPricingCatalogService(invalidAzure, invalidAi);
+    }
+    catch (PricingCatalogValidationException)
+    {
+        failed = true;
+    }
+
+    Assert(failed, "Expected invalid pricing catalog validation to fail.");
+}
+
+static async Task ScenarioAzureRetailClientBuildsQueryAndPaginates()
+{
+    var handler = new QueueHttpMessageHandler();
+    handler.EnqueueJson("""
+    {
+      "Items": [
+        { "currencyCode": "EUR", "unitPrice": 0.287, "armRegionName": "westeurope", "armSkuName": "P1v3", "skuName": "P1v3", "serviceName": "App Service", "productName": "App Service", "meterName": "P1v3", "unitOfMeasure": "1 Hour", "priceType": "Consumption" }
+      ],
+      "NextPageLink": "https://prices.test/next-page"
+    }
+    """);
+    handler.EnqueueJson("""
+    {
+      "Items": [
+        { "currencyCode": "EUR", "unitPrice": 0.288, "armRegionName": "westeurope", "armSkuName": "P1v3", "skuName": "P1v3", "serviceName": "App Service", "productName": "App Service", "meterName": "P1v3", "unitOfMeasure": "1 Hour", "priceType": "Consumption" }
+      ]
+    }
+    """);
+
+    var client = new AzureRetailPricesClient(
+        new HttpClient(handler),
+        Options.Create(AzureOptions(baseUrl: "https://prices.test/api/retail/prices")));
+    var result = await client.SearchAsync(
+        new AzureRetailPriceSearchRequest("serviceName eq 'App Service'", "EUR"),
+        CancellationToken.None);
+
+    var firstUrl = Uri.UnescapeDataString(handler.Requests[0].ToString());
+    Assert(result.Succeeded, "Expected Azure Retail client result to succeed.");
+    Assert(result.Items.Count == 2, "Expected paged items to be aggregated.");
+    Assert(firstUrl.Contains("api-version=2023-01-01-preview", StringComparison.Ordinal), "Expected API version in request.");
+    Assert(firstUrl.Contains("$filter=", StringComparison.Ordinal), "Expected OData filter in request.");
+    Assert(firstUrl.Contains("currencyCode eq 'EUR'", StringComparison.Ordinal), "Expected currencyCode filter.");
+    Assert(handler.Requests[1].ToString() == "https://prices.test/next-page", "Expected NextPageLink to be requested.");
+}
+
+static async Task ScenarioAzureRetailClientHandlesFailures()
+{
+    var nonOk = new QueueHttpMessageHandler();
+    nonOk.Enqueue(new HttpResponseMessage(HttpStatusCode.TooManyRequests));
+    var nonOkClient = new AzureRetailPricesClient(new HttpClient(nonOk), Options.Create(AzureOptions()));
+    var nonOkResult = await nonOkClient.SearchAsync(new AzureRetailPriceSearchRequest("serviceName eq 'App Service'", "EUR"), CancellationToken.None);
+    Assert(!nonOkResult.Succeeded && nonOkResult.ErrorMessage!.Contains("HTTP 429", StringComparison.Ordinal), "Expected non-200 response to fail gracefully.");
+
+    var invalidJson = new QueueHttpMessageHandler();
+    invalidJson.EnqueueText("{ not json");
+    var invalidJsonClient = new AzureRetailPricesClient(new HttpClient(invalidJson), Options.Create(AzureOptions()));
+    var invalidJsonResult = await invalidJsonClient.SearchAsync(new AzureRetailPriceSearchRequest("serviceName eq 'App Service'", "EUR"), CancellationToken.None);
+    Assert(!invalidJsonResult.Succeeded && invalidJsonResult.ErrorMessage!.Contains("invalid JSON", StringComparison.OrdinalIgnoreCase), "Expected invalid JSON to fail gracefully.");
+
+    var timeout = new QueueHttpMessageHandler { Exception = new TaskCanceledException("timeout") };
+    var timeoutClient = new AzureRetailPricesClient(new HttpClient(timeout), Options.Create(AzureOptions()));
+    var timeoutResult = await timeoutClient.SearchAsync(new AzureRetailPriceSearchRequest("serviceName eq 'App Service'", "EUR"), CancellationToken.None);
+    Assert(!timeoutResult.Succeeded && timeoutResult.ErrorMessage!.Contains("timed out", StringComparison.OrdinalIgnoreCase), "Expected timeout to fail gracefully.");
+}
+
+static async Task ScenarioAzureRetailProviderExactHourly()
+{
+    var fake = new FakeAzureRetailPricesClient(RetailResult(RetailItem(
+        serviceName: "App Service",
+        productName: "App Service",
+        skuName: "P1v3",
+        armSkuName: "P1v3",
+        meterName: "P1v3",
+        unit: "1 Hour",
+        unitPrice: 0.287m)));
+    var provider = new AzureLivePricingProvider(fake, Options.Create(AzureOptions(enabled: true)));
+    var result = await provider.TryEstimateMonthlyCostAsync(new PricingLookupRequest
+    {
+        Provider = "azure",
+        ResourceType = "azurerm_service_plan",
+        ResourceName = "api",
+        Sku = "P1v3",
+        Region = "West Europe",
+        Currency = "EUR",
+        MonthlyHours = 730,
+        Quantity = 1
+    }, CancellationToken.None);
+
+    Assert(result.Matched, "Expected live Azure Retail match.");
+    Assert(result.MatchType == PricingMatchType.AzureRetailExactRegionSkuMatch, $"Expected exact live match, got {result.MatchType}.");
+    Assert(result.EstimatedMonthlyCost == 209.51m, $"Expected hourly monthly conversion, got {result.EstimatedMonthlyCost}.");
+    Assert(result.SourceType == "AzureRetailPricesApi", "Expected live pricing source type.");
+    Assert(result.LiveApiUsed, "Expected live API flag.");
+    Assert(result.ConfidenceImpact == PricingConfidenceImpact.Increase, "Expected exact live match to increase confidence.");
+    Assert(!fake.Requests.Single().Filter.Contains("currencyCode", StringComparison.OrdinalIgnoreCase), "Currency should be added by client, not mapper.");
+    Assert(fake.Requests.Single().Filter.Contains("armRegionName eq 'westeurope'", StringComparison.Ordinal), "Expected normalized region in filter.");
+
+    var cached = await provider.TryEstimateMonthlyCostAsync(new PricingLookupRequest
+    {
+        Provider = "azure",
+        ResourceType = "azurerm_service_plan",
+        ResourceName = "api",
+        Sku = "P1v3",
+        Region = "West Europe",
+        Currency = "EUR",
+        MonthlyHours = 730,
+        Quantity = 1
+    }, CancellationToken.None);
+    Assert(cached.Matched && fake.Calls == 1, "Expected identical live pricing lookup to use in-memory cache.");
+}
+
+static async Task ScenarioAzureRetailProviderGbMonthAndAmbiguous()
+{
+    var storageProvider = new AzureLivePricingProvider(
+        new FakeAzureRetailPricesClient(RetailResult(RetailItem(
+            serviceName: "Storage",
+            productName: "Storage",
+            skuName: "Standard LRS",
+            armSkuName: "Standard_LRS",
+            meterName: "LRS Data Stored",
+            unit: "1 GB/Month",
+            unitPrice: 0.02m))),
+        Options.Create(AzureOptions(enabled: true)));
+    var storage = await storageProvider.TryEstimateMonthlyCostAsync(new PricingLookupRequest
+    {
+        Provider = "azure",
+        ResourceType = "azurerm_storage_account",
+        ResourceName = "data",
+        Sku = "Standard_LRS",
+        Region = "westeurope",
+        Currency = "EUR",
+        UsageQuantity = 250
+    }, CancellationToken.None);
+    Assert(storage.Matched && storage.EstimatedMonthlyCost == 5.00m, $"Expected GB-month conversion, got {storage.EstimatedMonthlyCost}.");
+
+    var ambiguousProvider = new AzureLivePricingProvider(
+        new FakeAzureRetailPricesClient(RetailResult(
+            RetailItem(serviceName: "App Service", productName: "App Service", skuName: "P1v3", armSkuName: "P1v3", meterName: "P1v3 A", unit: "1 Hour", unitPrice: 0.20m),
+            RetailItem(serviceName: "App Service", productName: "App Service", skuName: "P1v3", armSkuName: "P1v3", meterName: "P1v3 B", unit: "1 Hour", unitPrice: 0.20m))),
+        Options.Create(AzureOptions(enabled: true)));
+    var ambiguous = await ambiguousProvider.TryEstimateMonthlyCostAsync(new PricingLookupRequest
+    {
+        Provider = "azure",
+        ResourceType = "azurerm_service_plan",
+        ResourceName = "api",
+        Sku = "P1v3",
+        Region = "westeurope",
+        Currency = "EUR"
+    }, CancellationToken.None);
+    Assert(ambiguous.MatchType == PricingMatchType.AzureRetailAmbiguousMatch, $"Expected ambiguous match, got {ambiguous.MatchType}.");
+    Assert(ambiguous.AmbiguousMatch && ambiguous.ConfidenceImpact == PricingConfidenceImpact.Neutral, "Expected ambiguous match to lower confidence to medium.");
+
+    var unknownUnitProvider = new AzureLivePricingProvider(
+        new FakeAzureRetailPricesClient(RetailResult(RetailItem(
+            serviceName: "App Service",
+            productName: "App Service",
+            skuName: "P1v3",
+            armSkuName: "P1v3",
+            meterName: "Operations",
+            unit: "1M Operations",
+            unitPrice: 1m))),
+        Options.Create(AzureOptions(enabled: true)));
+    var unknownUnit = await unknownUnitProvider.TryEstimateMonthlyCostAsync(new PricingLookupRequest
+    {
+        Provider = "azure",
+        ResourceType = "azurerm_service_plan",
+        ResourceName = "api",
+        Sku = "P1v3",
+        Region = "westeurope",
+        Currency = "EUR"
+    }, CancellationToken.None);
+    Assert(!unknownUnit.Matched, "Expected unknown unit to avoid live estimate.");
+}
+
+static void ScenarioAzureRetailHybridFallback()
+{
+    var local = JsonPricingCatalogService.LoadDefault();
+    var failedLive = new FakeAzureLivePricingProvider(new PricingMatchResult
+    {
+        Matched = false,
+        Provider = "azure",
+        ResourceType = "azurerm_service_plan",
+        ResourceName = "api",
+        Sku = "P1v3",
+        Region = "westeurope",
+        Currency = "EUR",
+        MatchType = PricingMatchType.Unknown,
+        ConfidenceImpact = PricingConfidenceImpact.Decrease,
+        FallbackReason = "Azure Retail Prices API request failed or timed out."
+    });
+    var hybrid = new HybridPricingCatalogService(failedLive, local, Options.Create(AzureOptions(enabled: true, fallback: true)));
+    var fallback = hybrid.EstimateMonthlyCost(new PricingLookupRequest
+    {
+        Provider = "azure",
+        ResourceType = "azurerm_service_plan",
+        ResourceName = "api",
+        Sku = "P1v3",
+        Region = "westeurope",
+        Currency = "EUR"
+    });
+    Assert(fallback.Matched, "Expected local catalog fallback to provide an estimate.");
+    Assert(fallback.FallbackUsed, "Expected fallback flag.");
+    Assert(fallback.ConfidenceImpact == PricingConfidenceImpact.Decrease, "Expected live failure fallback to lower confidence.");
+    Assert(fallback.FallbackReason!.Contains("Azure Retail Prices API", StringComparison.Ordinal), "Expected fallback reason to mention live API.");
+
+    var noFallback = new HybridPricingCatalogService(failedLive, local, Options.Create(AzureOptions(enabled: true, fallback: false)));
+    var unknown = noFallback.EstimateMonthlyCost(new PricingLookupRequest
+    {
+        Provider = "azure",
+        ResourceType = "azurerm_service_plan",
+        ResourceName = "api",
+        Sku = "P1v3",
+        Region = "westeurope",
+        Currency = "EUR"
+    });
+    Assert(!unknown.Matched && unknown.MatchType == PricingMatchType.Unknown, "Expected unknown pricing when fallback is disabled.");
+}
+
+static async Task ScenarioAzureRetailMetadataReportAndDashboard()
+{
+    var fake = new FakeAzureRetailPricesClient(RetailResult(RetailItem(
+        serviceName: "App Service",
+        productName: "App Service Premium v3",
+        skuName: "P1v3",
+        armSkuName: "P1v3",
+        meterName: "P1v3",
+        unit: "1 Hour",
+        unitPrice: 0.287m,
+        meterId: "meter-p1v3")));
+    var service = new HybridPricingCatalogService(
+        new AzureLivePricingProvider(fake, Options.Create(AzureOptions(enabled: true))),
+        JsonPricingCatalogService.LoadDefault(),
+        Options.Create(AzureOptions(enabled: true)));
+    const string proposed =
+        """
+        resource "azurerm_service_plan" "api" {
+          name     = "api-plan"
+          location = "westeurope"
+          os_type  = "Linux"
+          sku_name = "P1v3"
+        }
+        """;
+    var request = Request(["main.tf"], [], [new RepositoryFile("main.tf", proposed)], pr: 702);
+    var result = CreateEngine(service).Analyze(request);
+    var resource = result.ProposedResources.Single();
+
+    Assert(resource.PricingLiveApiUsed, "Expected resource to record live API usage.");
+    Assert(resource.PricingMeterName == "P1v3", "Expected meter name metadata.");
+    Assert(resource.Confidence == ConfidenceLevel.High, $"Expected exact live match high confidence, got {resource.Confidence}.");
+    Assert(result.CommentMarkdown.Contains("Azure Retail Prices API", StringComparison.Ordinal), "Expected PR report live pricing source.");
+    Assert(result.CommentMarkdown.Contains("Fallback used: No", StringComparison.Ordinal), "Expected PR report no fallback flag.");
+    Assert(result.CommentMarkdown.Contains("Meter: P1v3", StringComparison.Ordinal), "Expected PR report meter.");
+
+    await using var fixture = await SqliteFixture.CreateAsync();
+    var repository = await fixture.RepositoryStore.FindOrCreateAsync("github", "acme", "payments-api", "main", null, null);
+    var scan = await fixture.ScanStore.CreateScanAsync(repository, request);
+    await fixture.ScanStore.MarkCompletedAsync(scan.Id, result, "123");
+    var loaded = await fixture.ScanStore.GetScanDetailsAsync(scan.Id);
+    var detail = AnalysisDetailResponse.FromScan(loaded!);
+    var persisted = detail.Resources.Single();
+
+    Assert(persisted.PricingLiveApiUsed, "Expected dashboard resource live API flag.");
+    Assert(persisted.PricingMeterName == "P1v3", "Expected dashboard meter name.");
+    Assert(detail.CommentMarkdown.Contains("Azure Retail Prices API", StringComparison.Ordinal), "Expected persisted PR comment live pricing metadata.");
+}
+
+static void ScenarioAzureRetailRegionAndMapping()
+{
+    var normalized = AzureRegionNormalizer.Normalize("EU West", "northeurope", out var defaulted);
+    Assert(normalized == "westeurope" && !defaulted, "Expected EU West to normalize to westeurope.");
+    var defaultRegion = AzureRegionNormalizer.Normalize(null, "North Europe", out var wasDefaulted);
+    Assert(defaultRegion == "northeurope" && wasDefaulted, "Expected missing region to default and normalize.");
+
+    var candidates = AzureRetailPriceQueryMapper.BuildCandidates(new PricingLookupRequest
+    {
+        Provider = "azure",
+        ResourceType = "azurerm_redis_cache",
+        ResourceName = "cache",
+        Sku = "Premium_P_1",
+        Region = "West Europe",
+        Currency = "EUR"
+    }, AzureOptions(enabled: true), out var region, out _);
+
+    Assert(region == "westeurope", "Expected candidate mapper to normalize region.");
+    Assert(candidates.Any(candidate => candidate.Filter.Contains("Azure Cache for Redis", StringComparison.Ordinal)), "Expected Redis service candidate.");
+    Assert(candidates.Any(candidate => candidate.Filter.Contains("P1", StringComparison.Ordinal)), "Expected Redis P1 SKU/meter candidate.");
+}
+
+static void ScenarioTerraformPlanJsonDetection()
+{
+    Assert(FileDiscovery.Detect("tfplan.json").Kind == RelevantFileKind.TerraformPlanJson, "Expected root tfplan.json to be detected.");
+    Assert(FileDiscovery.Detect("infra/terraform-plan.json").Kind == RelevantFileKind.TerraformPlanJson, "Expected infra Terraform plan JSON to be detected.");
+    Assert(FileDiscovery.Detect("terraform/plan.json").Kind == RelevantFileKind.TerraformPlanJson, "Expected terraform/plan.json to be detected.");
+    Assert(FileDiscovery.Detect("main.tf").Kind == RelevantFileKind.Terraform, "Expected .tf support to remain intact.");
+}
+
+static void ScenarioTerraformPlanJsonActionMapping()
+{
+    var parser = new TerraformPlanJsonParser();
+    var parsed = parser.Parse([
+        PlanFile(TerraformPlan(
+            StorageCheapCreateChange(),
+            ServicePlanUpgradeChange(),
+            SqlDeleteChange(),
+            ServicePlanReplaceChange(),
+            NoOpChange(),
+            ReadChange()))
+    ], "westeurope", 730, "feature/dev-plan");
+
+    Assert(parsed.Errors.Count == 0, "Expected valid plan JSON.");
+    Assert(parsed.ChangeHints.Count == 4, $"Expected no-op/read changes to be ignored, got {parsed.ChangeHints.Count} changes.");
+    Assert(parsed.ChangeHints.Any(change => change.ChangeKind == "added"), "Expected create to map to added.");
+    Assert(parsed.ChangeHints.Any(change => change.ChangeKind == "changed" && change.TerraformActions == "update"), "Expected update to map to changed.");
+    Assert(parsed.ChangeHints.Any(change => change.ChangeKind == "removed"), "Expected delete to map to removed.");
+    Assert(parsed.ChangeHints.Any(change => change.ChangeKind == "changed" && change.Reason?.Contains("replaced", StringComparison.OrdinalIgnoreCase) == true), "Expected replace to map to changed with replacement reason.");
+}
+
+static void ScenarioTerraformPlanJsonAzureExtraction()
+{
+    var parser = new TerraformPlanJsonParser();
+    var parsed = parser.Parse([PlanFile(TerraformPlan(RedisPremiumCreateChange()))], "westeurope", 730, "feature/dev-plan");
+    var resource = parsed.AfterResources.Single();
+
+    Assert(resource.AnalysisSource == TerraformPlanJsonParser.AnalysisSource, "Expected Terraform plan JSON analysis source.");
+    Assert(resource.TerraformAddress == "azurerm_redis_cache.main", "Expected Terraform address.");
+    Assert(resource.TerraformActions == "create", "Expected Terraform action.");
+    Assert(resource.ResourceType == "azurerm_redis_cache", "Expected Redis resource type.");
+    Assert(resource.Sku == "Premium_P_1", $"Expected Premium_P_1 SKU, got {resource.Sku}.");
+    Assert(resource.Region == "westeurope", "Expected region from plan JSON.");
+}
+
+static void ScenarioTerraformPlanJsonEngineFlow()
+{
+    var result = CreateEngine().Analyze(Request(
+        ["infra/tfplan.json"],
+        [],
+        [PlanFile(TerraformPlan(RedisPremiumCreateChange(), ServicePlanUpgradeChange()))],
+        pr: 20));
+
+    Assert(result.Analysis.Status == AnalysisStatus.Completed, "Expected completed plan JSON analysis.");
+    Assert(result.ProposedResources.Any(resource => resource.AnalysisSource == TerraformPlanJsonParser.AnalysisSource), "Expected Terraform plan JSON resources.");
+    Assert(result.CostChanges.Any(change => change.TerraformAddress == "azurerm_redis_cache.main"), "Expected plan JSON cost breakdown.");
+    Assert(result.Analysis.MonthlyDelta > 300, $"Expected high monthly delta, got {result.Analysis.MonthlyDelta}.");
+    Assert(result.CommentMarkdown.Contains("Terraform plan JSON was detected and used", StringComparison.Ordinal), "Expected PR comment to mention plan JSON source.");
+    Assert(result.CommentMarkdown.Contains("| Resource | Change | Before | After | Estimated monthly delta |", StringComparison.Ordinal), "Expected before/after markdown table.");
+}
+
+static void ScenarioTerraformPlanJsonSkuUpgrade()
+{
+    var result = CreateEngine().Analyze(Request(
+        ["infra/tfplan.json"],
+        [],
+        [PlanFile(TerraformPlan(ServicePlanUpgradeChange()))],
+        pr: 21));
+    var change = result.CostChanges.Single();
+
+    Assert(change.ChangeKind == "changed", "Expected SKU upgrade to be modified.");
+    Assert(change.BeforeSummary == "B1", $"Expected before summary B1, got {change.BeforeSummary}.");
+    Assert(change.AfterSummary == "P1v3", $"Expected after summary P1v3, got {change.AfterSummary}.");
+    Assert(change.MonthlyDelta > 200, $"Expected App Service SKU upgrade delta above 200, got {change.MonthlyDelta}.");
+    Assert(result.Analysis.PolicyStatus is PolicyAction.Block or PolicyAction.Warn, "Expected SKU upgrade to warn or fail policy.");
+}
+
+static void ScenarioTerraformPlanJsonRemovedResource()
+{
+    var result = CreateEngine().Analyze(Request(
+        ["infra/tfplan.json"],
+        [],
+        [PlanFile(TerraformPlan(SqlDeleteChange()))],
+        pr: 22));
+    var change = result.CostChanges.Single();
+
+    Assert(change.ChangeKind == "removed", "Expected deleted plan resource to map to removed.");
+    Assert(change.MonthlyDelta < 0, $"Expected removed resource to produce negative delta, got {change.MonthlyDelta}.");
+    Assert(result.ProposedResources.Single().MonthlyCost == 0, "Expected removed resource to be persisted as zero proposed cost.");
+}
+
+static void ScenarioTerraformPlanJsonUnknownResource()
+{
+    var result = CreateEngine().Analyze(Request(
+        ["terraform/plan.json"],
+        [],
+        [new RepositoryFile("terraform/plan.json", TerraformPlan(UnknownCreateChange()))],
+        pr: 23));
+    var resource = result.ProposedResources.Single();
+
+    Assert(result.Analysis.Status == AnalysisStatus.Completed, "Expected unknown plan resource not to crash.");
+    Assert(resource.Status == EstimateStatus.Unsupported, $"Expected unsupported status, got {resource.Status}.");
+    Assert(resource.Confidence == ConfidenceLevel.Low, "Expected low confidence for unknown resource type.");
+}
+
+static void ScenarioTerraformPlanJsonInvalidInput()
+{
+    var result = CreateEngine().Analyze(Request(
+        ["infra/tfplan.json"],
+        [],
+        [new RepositoryFile("infra/tfplan.json", "{ nope")],
+        pr: 24));
+
+    Assert(result.Analysis.Status == AnalysisStatus.Completed, "Expected invalid plan JSON to become a warning, not a crash.");
+    Assert(result.ConfigErrors.Any(error => error.Contains("Terraform plan JSON could not be parsed", StringComparison.OrdinalIgnoreCase)), "Expected parse warning.");
+    Assert(result.Analysis.PolicyStatus == PolicyAction.Warn, "Expected validation warning policy status.");
+}
+
+static void ScenarioArmTemplateJsonDetection()
+{
+    Assert(FileDiscovery.Detect("main.json").Kind == RelevantFileKind.ArmTemplateJson, "Expected root main.json to be detected.");
+    Assert(FileDiscovery.Detect("infra/main.json").Kind == RelevantFileKind.ArmTemplateJson, "Expected infra main.json to be detected.");
+    Assert(FileDiscovery.Detect("bicep/azuredeploy.json").Kind == RelevantFileKind.ArmTemplateJson, "Expected bicep/azuredeploy.json to be detected.");
+    Assert(FileDiscovery.Detect("src/main.json").Kind == RelevantFileKind.Other, "Expected unrelated folder main.json to be ignored.");
+    Assert(FileDiscovery.Detect("infra/package-lock.json").Kind == RelevantFileKind.Other, "Expected unrelated JSON file name to be ignored.");
+    Assert(ArmTemplateJsonParser.IsArmTemplateJson(ArmTemplate(ServicePlanArmResource("api-plan", "B1"))), "Expected valid ARM template JSON.");
+    Assert(!ArmTemplateJsonParser.IsArmTemplateJson("""{ "resources": [{ "name": "not-azure" }] }"""), "Expected unrelated JSON resources array to be rejected.");
+}
+
+static void ScenarioArmTemplateJsonExtraction()
+{
+    var parser = new ArmTemplateJsonParser();
+    var parsed = parser.Parse([
+        ArmFile(ArmTemplate(
+            StorageArmResource("demo-storage", "Standard_LRS", "westeurope", 25),
+            ServicePlanArmResource("api-plan", "B1"),
+            RedisArmResource("redis-prod", "Premium", "P", 1),
+            AksArmResource("aks-demo", "Standard_B2s", 2)))
+    ], "westeurope", 730, "feature/dev-arm");
+
+    Assert(parsed.Errors.Count == 0, "Expected valid ARM template JSON.");
+    Assert(parsed.Resources.Count == 4, $"Expected four parsed ARM resources, got {parsed.Resources.Count}.");
+    var servicePlan = parsed.Resources.Single(resource => resource.ResourceName == "api-plan");
+    Assert(servicePlan.AnalysisSource == ArmTemplateJsonParser.AnalysisSource, "Expected ARM analysis source.");
+    Assert(servicePlan.ArmResourceType == "Microsoft.Web/serverfarms", "Expected original ARM resource type.");
+    Assert(servicePlan.ResourceType == "azurerm_service_plan", "Expected mapped pricing resource type.");
+    Assert(servicePlan.MappedResourceType == "azurerm_service_plan", "Expected mapped resource metadata.");
+    Assert(servicePlan.ArmApiVersion == "2022-03-01", "Expected API version.");
+    Assert(servicePlan.Sku == "B1", $"Expected B1 SKU, got {servicePlan.Sku}.");
+    Assert(servicePlan.Region == "westeurope", "Expected ARM location.");
+
+    var redis = parsed.Resources.Single(resource => resource.ResourceName == "redis-prod");
+    Assert(redis.ResourceType == "azurerm_redis_cache", "Expected Redis mapping.");
+    Assert(redis.Sku == "Premium_P_1", $"Expected Premium_P_1 SKU, got {redis.Sku}.");
+
+    var aks = parsed.Resources.Single(resource => resource.ResourceName == "aks-demo");
+    Assert(aks.ResourceType == "azurerm_kubernetes_cluster", "Expected AKS mapping.");
+    Assert(aks.Sku == "Standard_B2s", "Expected AKS VM size as SKU.");
+    Assert(aks.Quantity == 2, "Expected AKS node count.");
+}
+
+static void ScenarioArmTemplateJsonExpressionHandling()
+{
+    var parser = new ArmTemplateJsonParser();
+    var parsed = parser.Parse([ArmFile(ParameterizedArmTemplate())], "northeurope", 730, "feature/dev-arm");
+    var servicePlan = parsed.Resources.Single(resource => resource.ResourceName == "parameterized-api-plan");
+    var unknown = parser.Parse([ArmFile(ArmTemplate(UnknownArmResource()))], "westeurope", 730).Resources.Single();
+
+    Assert(parsed.Errors.Count == 0, "Expected parameterized ARM template to parse.");
+    Assert(servicePlan.Region == "westeurope", "Expected location parameter default to resolve.");
+    Assert(servicePlan.Sku == "P1v3", $"Expected variable -> parameter SKU resolution, got {servicePlan.Sku}.");
+    Assert(servicePlan.Environment == "dev", "Expected environment tag parameter to resolve.");
+    Assert(parsed.Warnings.Any(warning => warning.Contains("Complex ARM expression", StringComparison.OrdinalIgnoreCase)), "Expected complex concat expression to be recorded.");
+    Assert(servicePlan.Raw.TryGetValue("armParameterResolved", out var resolvedParameters) && resolvedParameters is List<string>, "Expected resolved parameters in raw metadata.");
+    Assert(servicePlan.Raw.TryGetValue("armVariableResolved", out var resolvedVariables) && resolvedVariables is List<string>, "Expected resolved variables in raw metadata.");
+    Assert(unknown.ResourceType == "Microsoft.Custom/widgets", "Expected unknown ARM resource type to be preserved.");
+    Assert(!unknown.IsSupported, "Expected unknown ARM type to be unsupported.");
+}
+
+static void ScenarioArmTemplateJsonEngineFlow()
+{
+    var result = CreateEngine().Analyze(Request(
+        ["infra/main.json", "infra/main.bicep"],
+        [],
+        [
+            ArmFile(ArmTemplate(
+                RedisArmResource("redis-prod-demo", "Premium", "P", 1),
+                ServicePlanArmResource("expensive-api-plan", "P1v3"),
+                LogAnalyticsArmResource("expensive-logs", 50))),
+            new RepositoryFile("infra/main.bicep", """
+            resource rawPlan 'Microsoft.Web/serverfarms@2022-03-01' = {
+              name: 'raw-bicep-plan'
+              location: 'westeurope'
+              sku: {
+                name: 'B1'
+              }
+            }
+            """)
+        ],
+        pr: 25));
+
+    Assert(result.Analysis.Status == AnalysisStatus.Completed, "Expected completed ARM JSON analysis.");
+    Assert(result.ProposedResources.Any(resource => resource.AnalysisSource == ArmTemplateJsonParser.AnalysisSource), "Expected ARM resources.");
+    Assert(result.ProposedResources.All(resource => resource.ResourceName != "raw-bicep-plan"), "Expected compiled ARM JSON to take priority over raw Bicep fallback.");
+    Assert(result.CostChanges.Count >= 3, "Expected ARM cost breakdowns.");
+    Assert(result.Analysis.MonthlyDelta > 300, $"Expected high monthly delta, got {result.Analysis.MonthlyDelta}.");
+    Assert(result.Analysis.PolicyStatus is PolicyAction.Warn or PolicyAction.Block, "Expected expensive ARM change to warn or fail.");
+    Assert(result.CommentMarkdown.Contains("Bicep compiled ARM JSON was detected and used", StringComparison.Ordinal), "Expected PR comment to mention ARM source.");
+    Assert(result.CommentMarkdown.Contains("| Resource | ARM type | Mapped type | SKU | Region | Estimated monthly cost | Confidence |", StringComparison.Ordinal), "Expected ARM resource markdown table.");
+}
+
+static void ScenarioArmTemplateJsonInvalidAndEmptyInput()
+{
+    var invalid = CreateEngine().Analyze(Request(
+        ["infra/main.json"],
+        [],
+        [ArmFile("{ nope")],
+        pr: 26));
+    Assert(invalid.Analysis.Status == AnalysisStatus.Completed, "Expected invalid ARM JSON to become a warning, not a crash.");
+    Assert(invalid.ConfigErrors.Any(error => error.Contains("ARM template JSON could not be parsed", StringComparison.OrdinalIgnoreCase)), "Expected ARM parse warning.");
+    Assert(invalid.Analysis.PolicyStatus == PolicyAction.Warn, "Expected validation warning policy status.");
+
+    var parser = new ArmTemplateJsonParser();
+    var empty = parser.Parse([ArmFile(ArmTemplate())], "westeurope", 730);
+    Assert(empty.HasTemplateFiles, "Expected empty ARM template file to be recognized.");
+    Assert(empty.Resources.Count == 0, "Expected empty ARM resources array to produce no resources.");
+    Assert(empty.Warnings.Any(warning => warning.Contains("empty resources array", StringComparison.OrdinalIgnoreCase)), "Expected empty resources warning.");
+}
+
+static async Task ScenarioArmTemplateJsonPersistence()
+{
+    await using var fixture = await SqliteFixture.CreateAsync();
+    var repository = await fixture.RepositoryStore.FindOrCreateAsync("github", "acme", "payments-api", "main", null, null);
+    var request = Request(
+        ["infra/main.json"],
+        [],
+        [ArmFile(ArmTemplate(ServicePlanArmResource("api-plan", "P1v3")))],
+        pr: 604);
+    var scan = await fixture.ScanStore.CreateScanAsync(repository, request);
+    var result = CreateEngine().Analyze(request);
+
+    await fixture.ScanStore.MarkCompletedAsync(scan.Id, result, "123");
+    var loaded = await fixture.ScanStore.GetScanDetailsAsync(scan.Id);
+    var detected = loaded!.DetectedResources.Single();
+    var detail = AnalysisDetailResponse.FromScan(loaded);
+    var resource = detail.Resources.Single();
+
+    Assert(detected.RawJson.Contains("Microsoft.Web/serverfarms", StringComparison.Ordinal), "Expected ARM type in detected resource raw JSON.");
+    Assert(loaded.ScanAssumptions.Any(assumption => assumption.Name == "ArmTemplateDiffMode" && assumption.Value == ArmTemplateJsonParser.ArmTemplateDiffMode), "Expected ARM diff mode assumption.");
+    Assert(detail.AnalysisSource == ArmTemplateJsonParser.AnalysisSource, "Expected dashboard detail source to be ARM JSON.");
+    Assert(resource.ArmResourceType == "Microsoft.Web/serverfarms", "Expected dashboard resource ARM type.");
+    Assert(resource.MappedResourceType == "azurerm_service_plan", "Expected dashboard resource mapped type.");
+    Assert(detail.CommentMarkdown.Contains("Bicep compiled ARM JSON was detected and used", StringComparison.Ordinal), "Expected persisted dashboard PR comment to include ARM source.");
 }
 
 static void ScenarioPolicyValidation()
@@ -522,6 +1259,26 @@ static async Task ScenarioRunningScanPersistence()
     Assert(loaded.StartedAt is not null, "Expected started timestamp.");
 }
 
+static async Task ScenarioBackgroundScanQueueRoundTrips()
+{
+    var queue = new ChannelScanJobQueue();
+    var job = new QueuedScanJob(
+        Guid.NewGuid(),
+        Guid.NewGuid(),
+        Guid.NewGuid(),
+        Request(["main.tf"], [], [], pr: 77),
+        "corr-test");
+
+    await queue.QueueAsync(job);
+    var dequeued = await queue.DequeueAsync();
+
+    Assert(dequeued.ScanId == job.ScanId, "Expected queued scan id to round-trip.");
+    Assert(dequeued.ProjectId == job.ProjectId, "Expected queued project id to round-trip.");
+    Assert(dequeued.RepositoryId == job.RepositoryId, "Expected queued repository id to round-trip.");
+    Assert(dequeued.CorrelationId == "corr-test", "Expected queued correlation id to round-trip.");
+    Assert(dequeued.Request.PullRequestNumber == 77, "Expected queued request to round-trip.");
+}
+
 static async Task ScenarioCompletedScanPersistence()
 {
     await using var fixture = await SqliteFixture.CreateAsync();
@@ -555,6 +1312,65 @@ static async Task ScenarioFailedScanPersistence()
     Assert(loaded?.Status == ScanStatus.Failed, "Expected failed status.");
     Assert(loaded!.FailureReason == "boom", "Expected failure reason.");
     Assert(loaded.GitHubCommentId == "888", "Expected GitHub comment id to be saved on failure.");
+}
+
+static async Task ScenarioPricingCatalogDashboardPersistence()
+{
+    await using var fixture = await SqliteFixture.CreateAsync();
+    var repository = await fixture.RepositoryStore.FindOrCreateAsync("github", "acme", "payments-api", "main", null, null);
+    var request = Request(
+        ["main.tf"],
+        [],
+        [new RepositoryFile("main.tf", """
+        resource "azurerm_service_plan" "api" {
+          name     = "api-plan"
+          location = "westeurope"
+          os_type  = "Linux"
+          sku_name = "P1v3"
+        }
+        """)],
+        pr: 602);
+    var scan = await fixture.ScanStore.CreateScanAsync(repository, request);
+    var result = CreateEngine().Analyze(request);
+
+    await fixture.ScanStore.MarkCompletedAsync(scan.Id, result, "123");
+    var loaded = await fixture.ScanStore.GetScanDetailsAsync(scan.Id);
+    var breakdown = loaded!.CostBreakdownItems.Single();
+    var detail = AnalysisDetailResponse.FromScan(loaded);
+    var resource = detail.Resources.Single();
+
+    Assert(breakdown.PricingCatalogVersion == "2026.07.01", "Expected cost breakdown catalog version.");
+    Assert(breakdown.PricingMatchType == PricingMatchType.ExactRegionSkuMatch.ToString(), "Expected exact pricing match on breakdown.");
+    Assert(resource.PricingCatalogVersion == "2026.07.01", "Expected dashboard resource catalog version.");
+    Assert(resource.PricingMatchType == PricingMatchType.ExactRegionSkuMatch.ToString(), "Expected dashboard resource match quality.");
+    Assert(detail.CommentMarkdown.Contains("### Pricing metadata", StringComparison.Ordinal), "Expected persisted dashboard PR comment to include pricing metadata.");
+}
+
+static async Task ScenarioTerraformPlanJsonPersistence()
+{
+    await using var fixture = await SqliteFixture.CreateAsync();
+    var repository = await fixture.RepositoryStore.FindOrCreateAsync("github", "acme", "payments-api", "main", null, null);
+    var request = Request(
+        ["infra/tfplan.json"],
+        [],
+        [PlanFile(TerraformPlan(ServicePlanUpgradeChange()))],
+        pr: 601);
+    var scan = await fixture.ScanStore.CreateScanAsync(repository, request);
+    var result = CreateEngine().Analyze(request);
+
+    await fixture.ScanStore.MarkCompletedAsync(scan.Id, result, "123");
+    var loaded = await fixture.ScanStore.GetScanDetailsAsync(scan.Id);
+    var detected = loaded!.DetectedResources.Single();
+    var breakdown = loaded.CostBreakdownItems.Single();
+    var detail = AnalysisDetailResponse.FromScan(loaded);
+
+    Assert(detected.TerraformAddress == "azurerm_service_plan.api", "Expected Terraform address on detected resource.");
+    Assert(detected.TerraformActions == "update", "Expected Terraform actions on detected resource.");
+    Assert(breakdown.BeforeSummary == "B1", "Expected before summary on cost breakdown.");
+    Assert(breakdown.AfterSummary == "P1v3", "Expected after summary on cost breakdown.");
+    Assert(detail.AnalysisSource == TerraformPlanJsonParser.AnalysisSource, "Expected dashboard detail source to be Terraform plan JSON.");
+    Assert(detail.Resources.Single().TerraformAddress == "azurerm_service_plan.api", "Expected dashboard resource Terraform address.");
+    Assert(detail.CostChanges.Single().BeforeSummary == "B1", "Expected dashboard before summary.");
 }
 
 static async Task ScenarioGitHubPublishingMetadataPersistence()
@@ -623,8 +1439,137 @@ static async Task ScenarioDashboardPersistenceQueries()
     Assert(commentId == "999", "Expected existing GitHub comment id.");
 }
 
+static async Task ScenarioPrivateBetaModelPersistence()
+{
+    await using var fixture = await SqliteFixture.CreateAsync();
+    var registered = fixture.Store.RegisterUser("owner@example.com", "secret-passphrase", "Owner One");
+    var user = registered.User;
+    Assert(user is not null, "Expected registered user.");
+
+    var workspace = fixture.Store.GetWorkspaces(user!.Id).Single();
+    var project = fixture.Store.CreateProject(new CreateProjectRequest(
+        workspace.Id,
+        "Payments API",
+        "acme",
+        "payments-api",
+        "northeurope",
+        "EUR",
+        730));
+    var repository = await fixture.RepositoryStore.FindOrCreateAsync(project.Id, "github", "acme", "payments-api", "main", null, null);
+
+    var budgets = fixture.Store.GetBudgets(project.Id);
+    Assert(budgets.Count == 3, "Expected default dev/staging/production budgets.");
+
+    var saved = fixture.Store.UpsertBudget(project.Id, new EnvironmentBudgetUpdateRequest(
+        "dev",
+        50,
+        25,
+        "EUR",
+        null,
+        true));
+    var loaded = fixture.Store.GetProjectForUser(project.Id, user.Id);
+    var parsed = SpendGovConfigParser.Parse(loaded!.PolicyYaml, ProjectSettings.FromProject(loaded));
+
+    Assert(saved.MaxMonthlyCost == 50, "Expected budget max monthly cost to persist.");
+    Assert(loaded.PolicyYaml.Contains("BudgetSource: DatabaseProjectEnvironmentBudget", StringComparison.Ordinal), "Expected DB budget source marker.");
+    Assert(parsed.Config.Environments["dev"].MonthlyBudget == 50, "Expected environment budget to feed effective policy YAML.");
+    Assert(parsed.Config.Rules.Any(rule => rule.Id == "dev-monthly-delta" && rule.Threshold == 25), "Expected delta budget rule in effective policy YAML.");
+
+    var analysisRequest = PersistenceRequest() with
+    {
+        ProjectId = project.Id,
+        Settings = ProjectSettings.FromProject(loaded)
+    };
+    var scan = await fixture.ScanStore.CreateScanAsync(repository, analysisRequest);
+    await fixture.ScanStore.MarkRunningAsync(scan.Id, DateTimeOffset.UtcNow);
+    var result = CreateEngine().Analyze(analysisRequest);
+    await fixture.ScanStore.MarkCompletedAsync(scan.Id, result, null);
+    var details = await fixture.ScanStore.GetScanDetailsAsync(scan.Id);
+
+    Assert(details!.ScanAssumptions.Any(assumption => assumption.Name == "BudgetSource" && assumption.Value == "DatabaseProjectEnvironmentBudget"), "Expected persisted DB budget source assumption.");
+}
+
+static async Task ScenarioProjectScopedRepositoryPersistence()
+{
+    await using var fixture = await SqliteFixture.CreateAsync();
+    var user = fixture.Store.GetOrCreateUser("project-owner@example.com");
+    var workspace = fixture.Store.GetWorkspaces(user.Id).Single();
+    var firstProject = fixture.Store.CreateProject(new CreateProjectRequest(
+        workspace.Id,
+        "Payments API Dev",
+        "acme",
+        "payments-api",
+        "westeurope",
+        "EUR",
+        730));
+    var secondProject = fixture.Store.CreateProject(new CreateProjectRequest(
+        workspace.Id,
+        "Payments API Prod",
+        "acme",
+        "payments-api",
+        "westeurope",
+        "EUR",
+        730));
+
+    var firstRepository = await fixture.RepositoryStore.FindOrCreateAsync(firstProject.Id, "github", "acme", "payments-api", "main", null, null);
+    var secondRepository = await fixture.RepositoryStore.FindOrCreateAsync(secondProject.Id, "github", "acme", "payments-api", "main", null, null);
+    var loadedFirst = await fixture.RepositoryStore.FindByProjectIdAsync(firstProject.Id);
+    var loadedSecond = await fixture.RepositoryStore.FindByProjectIdAsync(secondProject.Id);
+
+    Assert(firstRepository.Id != secondRepository.Id, "Expected same GitHub repo to be tracked separately per project.");
+    Assert(loadedFirst?.Id == firstRepository.Id, "Expected first project repository lookup.");
+    Assert(loadedSecond?.Id == secondRepository.Id, "Expected second project repository lookup.");
+}
+
+static async Task ScenarioPrivateBetaCrossWorkspaceScoping()
+{
+    await using var fixture = await SqliteFixture.CreateAsync();
+    var firstUser = fixture.Store.RegisterUser("first@example.com", "secret-passphrase", "First Owner").User!;
+    var secondUser = fixture.Store.RegisterUser("second@example.com", "secret-passphrase", "Second Owner").User!;
+    var firstWorkspace = fixture.Store.GetWorkspaces(firstUser.Id).Single();
+    var project = fixture.Store.CreateProject(new CreateProjectRequest(
+        firstWorkspace.Id,
+        "Private API",
+        "acme",
+        "private-api",
+        "westeurope",
+        "EUR",
+        730));
+    var repository = await fixture.RepositoryStore.FindOrCreateAsync(project.Id, "github", "acme", "private-api", "main", null, null);
+    var request = PersistenceRequest() with { ProjectId = project.Id, RepositoryName = "private-api" };
+    var scan = await fixture.ScanStore.CreateScanAsync(repository, request);
+
+    Assert(fixture.Store.GetProjectForUser(project.Id, firstUser.Id) is not null, "Expected owner to access project.");
+    Assert(fixture.Store.GetProjectForUser(project.Id, secondUser.Id) is null, "Expected another workspace user to be blocked.");
+    Assert(fixture.Store.GetProjectForUser(repository.ProjectId, secondUser.Id) is null, "Expected scan repository project to remain inaccessible.");
+    Assert(scan.RepositoryId == repository.Id, "Expected scan to remain linked through repository.");
+}
+
+static async Task ScenarioPrivateBetaMemberIsViewOnly()
+{
+    await using var fixture = await SqliteFixture.CreateAsync();
+    var owner = fixture.Store.RegisterUser("owner2@example.com", "secret-passphrase", "Owner Two").User!;
+    var member = fixture.Store.RegisterUser("member@example.com", "secret-passphrase", "Member User").User!;
+    var workspace = fixture.Store.GetWorkspaces(owner.Id).Single();
+    fixture.Context.WorkspaceMembers.Add(new WorkspaceMemberEntity
+    {
+        WorkspaceId = workspace.Id,
+        UserId = member.Id,
+        Role = WorkspaceRole.Member
+    });
+    await fixture.Context.SaveChangesAsync();
+
+    Assert(fixture.Store.CanAccessWorkspace(member.Id, workspace.Id), "Expected member to view workspace.");
+    Assert(!fixture.Store.CanEditWorkspace(member.Id, workspace.Id), "Expected member to be blocked from management actions.");
+    Assert(fixture.Store.CanEditWorkspace(owner.Id, workspace.Id), "Expected owner to manage workspace.");
+}
+
 static RealGitHubPullRequestReporter CreateRealReporter(FakeGitHubApiClient fake, bool enableCheckRuns = false)
 {
+    var connection = new SqliteConnection("Data Source=:memory:");
+    connection.Open();
+    var context = new SpendGovernorDbContext(new DbContextOptionsBuilder<SpendGovernorDbContext>().UseSqlite(connection).Options);
+    context.Database.EnsureCreated();
     return new RealGitHubPullRequestReporter(
         fake,
         Options.Create(new GitHubIntegrationOptions
@@ -633,7 +1578,7 @@ static RealGitHubPullRequestReporter CreateRealReporter(FakeGitHubApiClient fake
             EnableCheckRuns = enableCheckRuns,
             BotCommentMarker = PrCommentRenderer.Marker
         }),
-        new SpendGovernorStore());
+        new SpendGovernorStore(context));
 }
 
 static GitHubReportPublishRequest CreateGitHubPublishRequest(string? existingCommentId = null, string? existingCheckRunId = null)
@@ -693,6 +1638,417 @@ static AnalysisResult ResultWith(PolicyAction action, AnalysisStatus status = An
     };
 }
 
+static RepositoryFile PlanFile(string content)
+{
+    return new RepositoryFile("infra/tfplan.json", content);
+}
+
+static RepositoryFile ArmFile(string content, string path = "infra/main.json")
+{
+    return new RepositoryFile(path, content);
+}
+
+static string ArmTemplate(params string[] resources)
+{
+    return """
+           {
+             "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+             "contentVersion": "1.0.0.0",
+             "parameters": {},
+             "variables": {},
+             "resources": [
+           """ + string.Join(",", resources) + """
+             ],
+             "outputs": {}
+           }
+           """;
+}
+
+static string StorageArmResource(string name, string sku, string location, int estimatedGb)
+{
+    return $$"""
+             {
+               "type": "Microsoft.Storage/storageAccounts",
+               "apiVersion": "2023-01-01",
+               "name": "{{name}}",
+               "location": "{{location}}",
+               "sku": {
+                 "name": "{{sku}}",
+                 "tier": "Standard"
+               },
+               "kind": "StorageV2",
+               "tags": {
+                 "environment": "dev"
+               },
+               "properties": {
+                 "accessTier": "Hot",
+                 "estimatedGb": {{estimatedGb}}
+               }
+             }
+             """;
+}
+
+static string ServicePlanArmResource(string name, string sku)
+{
+    return $$"""
+             {
+               "type": "Microsoft.Web/serverfarms",
+               "apiVersion": "2022-03-01",
+               "name": "{{name}}",
+               "location": "westeurope",
+               "sku": {
+                 "name": "{{sku}}",
+                 "tier": "{{(sku.StartsWith("P", StringComparison.OrdinalIgnoreCase) ? "PremiumV3" : "Basic")}}",
+                 "capacity": 1
+               },
+               "kind": "linux",
+               "tags": {
+                 "environment": "dev"
+               },
+               "properties": {
+                 "reserved": true
+               }
+             }
+             """;
+}
+
+static string RedisArmResource(string name, string skuName, string family, int capacity)
+{
+    return $$"""
+             {
+               "type": "Microsoft.Cache/Redis",
+               "apiVersion": "2023-08-01",
+               "name": "{{name}}",
+               "location": "westeurope",
+               "sku": {
+                 "name": "{{skuName}}",
+                 "family": "{{family}}",
+                 "capacity": {{capacity}}
+               },
+               "tags": {
+                 "environment": "dev"
+               },
+               "properties": {
+                 "enableNonSslPort": false
+               }
+             }
+             """;
+}
+
+static string AksArmResource(string name, string vmSize, int nodeCount)
+{
+    return $$"""
+             {
+               "type": "Microsoft.ContainerService/managedClusters",
+               "apiVersion": "2023-10-01",
+               "name": "{{name}}",
+               "location": "westeurope",
+               "tags": {
+                 "environment": "dev"
+               },
+               "properties": {
+                 "agentPoolProfiles": [
+                   {
+                     "name": "system",
+                     "count": {{nodeCount}},
+                     "vmSize": "{{vmSize}}",
+                     "mode": "System"
+                   }
+                 ]
+               }
+             }
+             """;
+}
+
+static string LogAnalyticsArmResource(string name, int estimatedGb)
+{
+    return $$"""
+             {
+               "type": "Microsoft.OperationalInsights/workspaces",
+               "apiVersion": "2022-10-01",
+               "name": "{{name}}",
+               "location": "westeurope",
+               "sku": {
+                 "name": "PerGB2018"
+               },
+               "tags": {
+                 "environment": "dev"
+               },
+               "properties": {
+                 "retentionInDays": 30,
+                 "estimatedIngestionGbPerMonth": {{estimatedGb}}
+               }
+             }
+             """;
+}
+
+static string UnknownArmResource()
+{
+    return """
+           {
+             "type": "Microsoft.Custom/widgets",
+             "apiVersion": "2024-01-01",
+             "name": "custom-widget",
+             "location": "westeurope",
+             "sku": {
+               "name": "Large"
+             },
+             "properties": {}
+           }
+           """;
+}
+
+static string ParameterizedArmTemplate()
+{
+    return """
+           {
+             "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+             "contentVersion": "1.0.0.0",
+             "parameters": {
+               "location": {
+                 "type": "string",
+                 "defaultValue": "westeurope"
+               },
+               "skuName": {
+                 "type": "string",
+                 "defaultValue": "P1v3"
+               },
+               "environment": {
+                 "type": "string",
+                 "defaultValue": "dev"
+               }
+             },
+             "variables": {
+               "servicePlanName": "parameterized-api-plan",
+               "servicePlanSku": "[parameters('skuName')]"
+             },
+             "resources": [
+               {
+                 "type": "Microsoft.Web/serverfarms",
+                 "apiVersion": "2022-03-01",
+                 "name": "[variables('servicePlanName')]",
+                 "location": "[parameters('location')]",
+                 "sku": {
+                   "name": "[variables('servicePlanSku')]",
+                   "tier": "PremiumV3",
+                   "capacity": 1
+                 },
+                 "kind": "linux",
+                 "tags": {
+                   "environment": "[parameters('environment')]",
+                   "owner": "[concat('team-', parameters('environment'))]"
+                 },
+                 "properties": {
+                   "reserved": true
+                 }
+               }
+             ],
+             "outputs": {}
+           }
+           """;
+}
+
+static string TerraformPlan(params string[] resourceChanges)
+{
+    return """
+           {
+             "format_version": "1.2",
+             "resource_changes": [
+           """ + string.Join(",", resourceChanges) + """
+             ]
+           }
+           """;
+}
+
+static string StorageCheapCreateChange()
+{
+    return """
+           {
+             "address": "azurerm_storage_account.assets",
+             "mode": "managed",
+             "type": "azurerm_storage_account",
+             "name": "assets",
+             "provider_name": "registry.terraform.io/hashicorp/azurerm",
+             "change": {
+               "actions": ["create"],
+               "before": null,
+               "after": {
+                 "name": "assetsdev",
+                 "location": "westeurope",
+                 "account_tier": "Standard",
+                 "account_replication_type": "LRS",
+                 "estimated_gb": 100,
+                 "tags": { "environment": "dev" }
+               }
+             }
+           }
+           """;
+}
+
+static string RedisPremiumCreateChange()
+{
+    return """
+           {
+             "address": "azurerm_redis_cache.main",
+             "mode": "managed",
+             "type": "azurerm_redis_cache",
+             "name": "main",
+             "provider_name": "registry.terraform.io/hashicorp/azurerm",
+             "change": {
+               "actions": ["create"],
+               "before": null,
+               "after": {
+                 "name": "redis-dev",
+                 "location": "westeurope",
+                 "sku_name": "Premium",
+                 "family": "P",
+                 "capacity": 1,
+                 "tags": { "environment": "dev" }
+               }
+             }
+           }
+           """;
+}
+
+static string ServicePlanUpgradeChange()
+{
+    return """
+           {
+             "address": "azurerm_service_plan.api",
+             "mode": "managed",
+             "type": "azurerm_service_plan",
+             "name": "api",
+             "provider_name": "registry.terraform.io/hashicorp/azurerm",
+             "change": {
+               "actions": ["update"],
+               "before": {
+                 "name": "api-dev-plan",
+                 "location": "westeurope",
+                 "os_type": "Linux",
+                 "sku_name": "B1",
+                 "tags": { "environment": "dev" }
+               },
+               "after": {
+                 "name": "api-dev-plan",
+                 "location": "westeurope",
+                 "os_type": "Linux",
+                 "sku_name": "P1v3",
+                 "tags": { "environment": "dev" }
+               }
+             }
+           }
+           """;
+}
+
+static string ServicePlanReplaceChange()
+{
+    return """
+           {
+             "address": "azurerm_service_plan.replaced",
+             "mode": "managed",
+             "type": "azurerm_service_plan",
+             "name": "replaced",
+             "provider_name": "registry.terraform.io/hashicorp/azurerm",
+             "change": {
+               "actions": ["delete", "create"],
+               "before": {
+                 "name": "old-plan",
+                 "location": "westeurope",
+                 "os_type": "Linux",
+                 "sku_name": "B1"
+               },
+               "after": {
+                 "name": "new-plan",
+                 "location": "westeurope",
+                 "os_type": "Linux",
+                 "sku_name": "S1"
+               }
+             }
+           }
+           """;
+}
+
+static string SqlDeleteChange()
+{
+    return """
+           {
+             "address": "azurerm_mssql_database.old",
+             "mode": "managed",
+             "type": "azurerm_mssql_database",
+             "name": "old",
+             "provider_name": "registry.terraform.io/hashicorp/azurerm",
+             "change": {
+               "actions": ["delete"],
+               "before": {
+                 "name": "old-db",
+                 "location": "westeurope",
+                 "sku_name": "Basic",
+                 "max_size_gb": 2
+               },
+               "after": null
+             }
+           }
+           """;
+}
+
+static string NoOpChange()
+{
+    return """
+           {
+             "address": "azurerm_service_plan.noop",
+             "mode": "managed",
+             "type": "azurerm_service_plan",
+             "name": "noop",
+             "provider_name": "registry.terraform.io/hashicorp/azurerm",
+             "change": {
+               "actions": ["no-op"],
+               "before": { "sku_name": "B1", "location": "westeurope" },
+               "after": { "sku_name": "B1", "location": "westeurope" }
+             }
+           }
+           """;
+}
+
+static string ReadChange()
+{
+    return """
+           {
+             "address": "azurerm_service_plan.readonly",
+             "mode": "managed",
+             "type": "azurerm_service_plan",
+             "name": "readonly",
+             "provider_name": "registry.terraform.io/hashicorp/azurerm",
+             "change": {
+               "actions": ["read"],
+               "before": null,
+               "after": { "sku_name": "B1", "location": "westeurope" }
+             }
+           }
+           """;
+}
+
+static string UnknownCreateChange()
+{
+    return """
+           {
+             "address": "azurerm_unknown_widget.experimental",
+             "mode": "managed",
+             "type": "azurerm_unknown_widget",
+             "name": "experimental",
+             "provider_name": "registry.terraform.io/hashicorp/azurerm",
+             "change": {
+               "actions": ["create"],
+               "before": null,
+               "after": {
+                 "name": "experimental",
+                 "location": "westeurope",
+                 "sku_name": "mystery"
+               }
+             }
+           }
+           """;
+}
+
 static AnalysisRequest PersistenceRequest()
 {
     const string proposed =
@@ -710,11 +2066,150 @@ static AnalysisRequest PersistenceRequest()
     return Request(["main.tf"], [], [new RepositoryFile("main.tf", proposed)], pr: 501);
 }
 
+static AzureRetailPricesOptions AzureOptions(
+    bool enabled = false,
+    bool fallback = true,
+    string baseUrl = "https://prices.test/api/retail/prices")
+{
+    return new AzureRetailPricesOptions
+    {
+        Enabled = enabled,
+        BaseUrl = baseUrl,
+        ApiVersion = "2023-01-01-preview",
+        CurrencyCode = "EUR",
+        DefaultRegion = "westeurope",
+        TimeoutSeconds = 1,
+        CacheTtlHours = 24,
+        MaxPages = 5,
+        FallbackToLocalCatalog = fallback,
+        DefaultStorageGb = 100,
+        DefaultLogAnalyticsGb = 10
+    };
+}
+
+static AzureRetailPriceSearchResult RetailResult(params AzureRetailPriceItem[] items)
+{
+    return new AzureRetailPriceSearchResult(true, items, []);
+}
+
+static AzureRetailPriceItem RetailItem(
+    string serviceName,
+    string productName,
+    string skuName,
+    string armSkuName,
+    string meterName,
+    string unit,
+    decimal unitPrice,
+    string meterId = "meter-test")
+{
+    return new AzureRetailPriceItem
+    {
+        CurrencyCode = "EUR",
+        UnitPrice = unitPrice,
+        RetailPrice = unitPrice,
+        ArmRegionName = "westeurope",
+        Location = "EU West",
+        EffectiveStartDate = new DateTimeOffset(2026, 7, 1, 0, 0, 0, TimeSpan.Zero),
+        MeterId = meterId,
+        MeterName = meterName,
+        ProductName = productName,
+        SkuName = skuName,
+        ArmSkuName = armSkuName,
+        ServiceName = serviceName,
+        ServiceFamily = "Compute",
+        UnitOfMeasure = unit,
+        Type = "Consumption",
+        PriceType = "Consumption",
+        IsPrimaryMeterRegion = true
+    };
+}
+
 static void Assert(bool condition, string message)
 {
     if (!condition)
     {
         throw new InvalidOperationException(message);
+    }
+}
+
+sealed class QueueHttpMessageHandler : HttpMessageHandler
+{
+    private readonly Queue<HttpResponseMessage> responses = new();
+
+    public List<Uri> Requests { get; } = [];
+
+    public Exception? Exception { get; set; }
+
+    public void EnqueueJson(string json)
+    {
+        EnqueueText(json, "application/json");
+    }
+
+    public void EnqueueText(string text, string mediaType = "text/plain")
+    {
+        Enqueue(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(text, Encoding.UTF8, mediaType)
+        });
+    }
+
+    public void Enqueue(HttpResponseMessage response)
+    {
+        responses.Enqueue(response);
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Requests.Add(request.RequestUri!);
+        if (Exception is not null)
+        {
+            throw Exception;
+        }
+
+        return Task.FromResult(responses.Count > 0
+            ? responses.Dequeue()
+            : new HttpResponseMessage(HttpStatusCode.NotFound));
+    }
+}
+
+sealed class FakeAzureRetailPricesClient : IAzureRetailPricesClient
+{
+    private readonly Queue<AzureRetailPriceSearchResult> results = new();
+    private AzureRetailPriceSearchResult? lastResult;
+
+    public FakeAzureRetailPricesClient(params AzureRetailPriceSearchResult[] results)
+    {
+        foreach (var result in results)
+        {
+            this.results.Enqueue(result);
+        }
+    }
+
+    public List<AzureRetailPriceSearchRequest> Requests { get; } = [];
+
+    public int Calls { get; private set; }
+
+    public Task<AzureRetailPriceSearchResult> SearchAsync(AzureRetailPriceSearchRequest request, CancellationToken cancellationToken)
+    {
+        Calls++;
+        Requests.Add(request);
+        lastResult = results.Count > 0 ? results.Dequeue() : lastResult ?? AzureRetailPriceSearchResult.Failed("No fake result configured.");
+        return Task.FromResult(lastResult);
+    }
+}
+
+sealed class FakeAzureLivePricingProvider : IAzureLivePricingProvider
+{
+    private readonly PricingMatchResult result;
+
+    public FakeAzureLivePricingProvider(PricingMatchResult result)
+    {
+        this.result = result;
+    }
+
+    public Task<PricingMatchResult> TryEstimateMonthlyCostAsync(PricingLookupRequest request, CancellationToken cancellationToken)
+    {
+        return Task.FromResult(result);
     }
 }
 
@@ -851,12 +2346,15 @@ sealed class SqliteFixture : IAsyncDisposable
     {
         this.connection = connection;
         Context = context;
+        Store = new SpendGovernorStore(context);
         RepositoryStore = new RepositoryStore(context);
         ResultWriter = new ScanResultWriter(context);
         ScanStore = new ScanStore(context, ResultWriter);
     }
 
     public SpendGovernorDbContext Context { get; }
+
+    public SpendGovernorStore Store { get; }
 
     public RepositoryStore RepositoryStore { get; }
 

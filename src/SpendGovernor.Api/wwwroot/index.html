@@ -25,7 +25,16 @@
     <div class="login-box">
       <label for="emailInput">User</label>
       <input id="emailInput" type="email" autocomplete="email">
+      <label for="displayNameInput">Name</label>
+      <input id="displayNameInput" type="text" autocomplete="name" placeholder="Demo Owner">
+      <label for="passwordInput">Password</label>
+      <input id="passwordInput" type="password" autocomplete="current-password">
       <button id="switchUserButton">Switch</button>
+      <div class="login-actions">
+        <button id="loginButton" type="button">Login</button>
+        <button id="registerButton" type="button">Register</button>
+        <button id="logoutButton" type="button">Logout</button>
+      </div>
     </div>
   </aside>
 
@@ -50,6 +59,37 @@
     <section id="statusBanner" class="status-banner hidden"></section>
 
     <section id="overviewView" class="view active">
+      <div class="admin-grid">
+        <section class="admin-panel">
+          <h2>Workspace</h2>
+          <div class="inline-form">
+            <label>
+              Name
+              <input id="workspaceNameInput" type="text" placeholder="Platform team">
+            </label>
+            <button id="createWorkspaceButton" type="button">Create Workspace</button>
+          </div>
+        </section>
+        <section class="admin-panel">
+          <h2>Project</h2>
+          <div class="project-form">
+            <label>
+              Name
+              <input id="projectNameInput" type="text" placeholder="Payments API">
+            </label>
+            <label>
+              Owner
+              <input id="repoOwnerInput" type="text" placeholder="acme">
+            </label>
+            <label>
+              Repository
+              <input id="repoNameInput" type="text" placeholder="payments-api">
+            </label>
+            <button id="createProjectButton" type="button">Create Project</button>
+          </div>
+        </section>
+      </div>
+
       <div class="metric-grid">
         <div class="metric-panel">
           <span>Total PRs</span>
@@ -69,6 +109,22 @@
         </div>
       </div>
 
+      <h2>Repositories</h2>
+      <div class="table-wrap repository-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Provider</th>
+              <th>Repository</th>
+              <th>Default branch</th>
+              <th>Installation</th>
+              <th>Last scan</th>
+            </tr>
+          </thead>
+          <tbody id="repositoryBody"></tbody>
+        </table>
+      </div>
+
       <div class="toolbar">
         <label>
           Demo PR
@@ -76,6 +132,9 @@
             <option value="scenario-cheap-change">Cheap change</option>
             <option value="scenario-expensive-cloud-change">Expensive cloud change</option>
             <option value="scenario-expensive-ai-workflow">Expensive AI workflow</option>
+            <option value="bicep-arm-cheap-change">Bicep ARM cheap change</option>
+            <option value="bicep-arm-expensive-cloud-change">Bicep ARM expensive change</option>
+            <option value="bicep-arm-parameterized-template">Bicep ARM parameterized</option>
             <option value="small-vm">Small Azure VM</option>
             <option value="sku-threshold">SKU threshold</option>
             <option value="unknown-resource">Unknown resource</option>
@@ -145,7 +204,24 @@
     <section id="policiesView" class="view">
       <div class="section-heading">
         <h2>Budgets & Policies</h2>
-        <button id="savePolicyButton">Save Policy</button>
+        <div class="button-row">
+          <button id="saveBudgetsButton" type="button">Save Budgets</button>
+          <button id="savePolicyButton" type="button">Save Policy</button>
+        </div>
+      </div>
+      <div class="table-wrap budget-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Environment</th>
+              <th>Monthly budget</th>
+              <th>PR delta limit</th>
+              <th>Approval above</th>
+              <th>Block</th>
+            </tr>
+          </thead>
+          <tbody id="budgetRows"></tbody>
+        </table>
       </div>
       <textarea id="policyEditor" spellcheck="false"></textarea>
       <div id="policyValidation" class="validation-panel"></div>

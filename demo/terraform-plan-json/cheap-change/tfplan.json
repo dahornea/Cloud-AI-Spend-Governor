@@ -1,0 +1,46 @@
+{
+  "format_version": "1.2",
+  "resource_changes": [
+    {
+      "address": "azurerm_storage_account.assets",
+      "mode": "managed",
+      "type": "azurerm_storage_account",
+      "name": "assets",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "assetsdev",
+          "location": "westeurope",
+          "account_tier": "Standard",
+          "account_replication_type": "LRS",
+          "estimated_gb": 100,
+          "tags": {
+            "environment": "dev"
+          }
+        }
+      }
+    },
+    {
+      "address": "azurerm_service_plan.api",
+      "mode": "managed",
+      "type": "azurerm_service_plan",
+      "name": "api",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "api-dev-plan",
+          "location": "westeurope",
+          "os_type": "Linux",
+          "sku_name": "B1",
+          "tags": {
+            "environment": "dev"
+          }
+        }
+      }
+    }
+  ]
+}
