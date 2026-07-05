@@ -1,6 +1,6 @@
 # Demo Assets
 
-This folder is reserved for portfolio screenshots and short demo clips.
+This folder is reserved for real portfolio screenshots and short demo clips.
 
 Suggested captures:
 
