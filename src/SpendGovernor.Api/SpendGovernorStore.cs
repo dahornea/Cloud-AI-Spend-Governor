@@ -231,57 +231,81 @@ public sealed class SpendGovernorStore
 
     public Project EnsureDemoProject(User owner)
     {
-        var project = dbContext.Repositories
-            .Where(repository => repository.Provider == "github" && repository.FullName == "acme/spend-governor-demo")
-            .Include(repository => repository.Project!)
-                .ThenInclude(item => item.Repositories)
-            .Include(repository => repository.Project!)
-                .ThenInclude(item => item.EnvironmentBudgets)
-            .Select(repository => repository.Project)
-            .FirstOrDefault();
-        if (project is not null)
+        lock (Gate)
         {
-            EnsureWorkspaceMembership(project.WorkspaceId, owner.Id, WorkspaceRole.Owner);
-            return MapProject(project);
+            var project = dbContext.Repositories
+                .Where(repository => repository.Provider == "github" && repository.FullName == "acme/spend-governor-demo")
+                .Include(repository => repository.Project!)
+                    .ThenInclude(item => item.Repositories)
+                .Include(repository => repository.Project!)
+                    .ThenInclude(item => item.EnvironmentBudgets)
+                .Select(repository => repository.Project)
+                .FirstOrDefault();
+            if (project is null)
+            {
+                var workspaceIds = dbContext.WorkspaceMembers
+                    .Where(member => member.UserId == owner.Id)
+                    .Select(member => member.WorkspaceId)
+                    .ToArray();
+                project = dbContext.Projects
+                    .Where(item => workspaceIds.Contains(item.WorkspaceId) && item.Name == "Cloud & AI Spend Governor demo")
+                    .Include(item => item.Repositories)
+                    .Include(item => item.EnvironmentBudgets)
+                    .OrderBy(item => item.CreatedAt)
+                    .FirstOrDefault();
+            }
+
+            if (project is not null)
+            {
+                EnsureWorkspaceMembership(project.WorkspaceId, owner.Id, WorkspaceRole.Owner);
+                var mapped = MapProject(project);
+                mapped.RepositoryProvider = "github";
+                mapped.RepositoryOwner = "acme";
+                mapped.RepositoryName = "spend-governor-demo";
+                mapped.GitHubInstallationId = project.Repositories
+                    .FirstOrDefault(repository => repository.Provider == "github" && repository.FullName == "acme/spend-governor-demo")
+                    ?.InstallationId;
+                return mapped;
+            }
+
+            var workspace = dbContext.WorkspaceMembers
+                .Where(member => member.UserId == owner.Id)
+                .Include(member => member.Workspace)
+                .AsEnumerable()
+                .OrderBy(member => member.Workspace!.CreatedAt)
+                .Select(member => member.Workspace)
+                .FirstOrDefault()
+                ?? CreateWorkspaceEntity(owner.Id, "Acme Cloud Team");
+
+            project = new ProjectEntity
+            {
+                WorkspaceId = workspace.Id,
+                Name = "Cloud & AI Spend Governor demo",
+                Slug = UniqueProjectSlug(workspace.Id, "Cloud & AI Spend Governor demo"),
+                Provider = "azure",
+                DefaultRegion = "westeurope",
+                Currency = "EUR",
+                HoursPerMonth = 730,
+                PolicyYaml = PolicyConfig.DefaultYaml
+            };
+            dbContext.Projects.Add(project);
+            dbContext.SaveChanges();
+            AddDefaultBudgets(project);
+            AddAudit(project.WorkspaceId, project.Id, null, "Project created", "Demo project linked to acme/spend-governor-demo.");
+            return new Project
+            {
+                Id = project.Id,
+                WorkspaceId = project.WorkspaceId,
+                Name = project.Name,
+                Provider = project.Provider,
+                RepositoryOwner = "acme",
+                RepositoryName = "spend-governor-demo",
+                DefaultRegion = project.DefaultRegion,
+                Currency = project.Currency,
+                HoursPerMonth = project.HoursPerMonth,
+                PolicyYaml = EffectivePolicyYaml(project)
+            };
         }
-
-        var workspace = dbContext.WorkspaceMembers
-            .Where(member => member.UserId == owner.Id)
-            .Include(member => member.Workspace)
-            .AsEnumerable()
-            .OrderBy(member => member.Workspace!.CreatedAt)
-            .Select(member => member.Workspace)
-            .FirstOrDefault()
-            ?? CreateWorkspaceEntity(owner.Id, "Acme Cloud Team");
-
-        project = new ProjectEntity
-        {
-            WorkspaceId = workspace.Id,
-            Name = "Cloud & AI Spend Governor demo",
-            Slug = UniqueProjectSlug(workspace.Id, "Cloud & AI Spend Governor demo"),
-            Provider = "azure",
-            DefaultRegion = "westeurope",
-            Currency = "EUR",
-            HoursPerMonth = 730,
-            PolicyYaml = PolicyConfig.DefaultYaml
-        };
-        dbContext.Projects.Add(project);
-        dbContext.SaveChanges();
-        AddDefaultBudgets(project);
-        AddAudit(project.WorkspaceId, project.Id, null, "Project created", "Demo project linked to acme/spend-governor-demo.");
-        return new Project
-        {
-            Id = project.Id,
-            WorkspaceId = project.WorkspaceId,
-            Name = project.Name,
-            Provider = project.Provider,
-            RepositoryOwner = "acme",
-            RepositoryName = "spend-governor-demo",
-            DefaultRegion = project.DefaultRegion,
-            Currency = project.Currency,
-            HoursPerMonth = project.HoursPerMonth,
-            PolicyYaml = EffectivePolicyYaml(project)
-        };
     }
 
     public void UpdateProject(Guid projectId, PatchProjectSettingsRequest request)
@@ -602,28 +626,31 @@ public sealed class SpendGovernorStore
 
     private void EnsureOnboardingWorkspace(ApplicationUser user)
     {
-        if (dbContext.WorkspaceMembers.Any(member => member.UserId == user.Id))
+        lock (Gate)
         {
-            if (user.Email.Equals(DemoEmail, StringComparison.OrdinalIgnoreCase))
+            if (dbContext.WorkspaceMembers.Any(member => member.UserId == user.Id))
             {
-                var mapped = MapUser(user);
-                EnsureDemoProject(mapped);
+                if (user.Email.Equals(DemoEmail, StringComparison.OrdinalIgnoreCase))
+                {
+                    var mapped = MapUser(user);
+                    EnsureDemoProject(mapped);
+                }
+
+                return;
             }
 
-            return;
-        }
-
-        var workspaceName = user.Email.Equals(DemoEmail, StringComparison.OrdinalIgnoreCase)
-            ? "Acme Cloud Team"
-            : $"{user.DisplayName}'s Workspace";
-        var workspace = CreateWorkspaceEntity(user.Id, workspaceName);
-        if (user.Email.Equals(DemoEmail, StringComparison.OrdinalIgnoreCase))
-        {
-            EnsureDemoProject(MapUser(user));
-        }
-        else
-        {
-            AddAudit(workspace.Id, null, null, "Workspace created", $"Workspace {workspace.Name} created.");
+            var workspaceName = user.Email.Equals(DemoEmail, StringComparison.OrdinalIgnoreCase)
+                ? "Acme Cloud Team"
+                : $"{user.DisplayName}'s Workspace";
+            var workspace = CreateWorkspaceEntity(user.Id, workspaceName);
+            if (user.Email.Equals(DemoEmail, StringComparison.OrdinalIgnoreCase))
+            {
+                EnsureDemoProject(MapUser(user));
+            }
+            else
+            {
+                AddAudit(workspace.Id, null, null, "Workspace created", $"Workspace {workspace.Name} created.");
+            }
         }
     }
 

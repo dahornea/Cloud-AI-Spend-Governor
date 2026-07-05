@@ -18,7 +18,8 @@ public sealed class TerraformParser
         "azurerm_kubernetes_cluster",
         "azurerm_kubernetes_cluster_node_pool",
         "azurerm_container_app",
-        "azurerm_redis_cache"
+        "azurerm_redis_cache",
+        "azurerm_log_analytics_workspace"
     };
 
     public IReadOnlyList<CloudResourceEstimateInput> Parse(
@@ -228,6 +229,13 @@ public sealed class TerraformParser
                 var capacity = ResolveValue(ParserText.FindAssignment(body, "capacity"), variables);
                 resource.Sku = string.Join('_', new[] { sku, family, capacity }.Where(part => !string.IsNullOrWhiteSpace(part)));
                 resource.Capacity = ResolveDecimal(ParserText.FindAssignment(body, "capacity"), variables);
+                break;
+            case "azurerm_log_analytics_workspace":
+                resource.Sku = ResolveValue(ParserText.FindAssignment(body, "sku"), variables) ?? "PerGB2018";
+                resource.Capacity = ResolveDecimal(ParserText.FindAssignment(body, "estimated_gb"), variables)
+                    ?? ResolveDecimal(ParserText.FindAssignment(body, "estimated_ingestion_gb_per_month"), variables)
+                    ?? ResolveDecimal(ParserText.FindAssignment(body, "daily_quota_gb"), variables);
+                resource.Warnings.Add("Log Analytics pricing depends on ingestion volume; include estimated_gb for a stronger estimate.");
                 break;
         }
 

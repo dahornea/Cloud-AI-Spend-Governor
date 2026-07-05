@@ -59,6 +59,18 @@
     <section id="statusBanner" class="status-banner hidden"></section>
 
     <section id="overviewView" class="view active">
+      <section class="hero-panel" aria-labelledby="heroTitle">
+        <div>
+          <p class="eyebrow">PR-time cost governance</p>
+          <h2 id="heroTitle">Catch cloud and AI cost increases before merge/deploy.</h2>
+          <p>Seed demo scans or run a demo PR to show PASS/WARN/FAIL decisions, resource-level cost drivers, pricing metadata, and developer recommendations.</p>
+        </div>
+        <div class="hero-actions">
+          <button id="heroSeedDemoButton" class="primary" type="button">Seed screenshot demo</button>
+          <button id="heroRunDemoButton" type="button">Run selected demo PR</button>
+        </div>
+      </section>
+
       <div class="admin-grid">
         <section class="admin-panel">
           <h2>Workspace</h2>
@@ -92,20 +104,28 @@
 
       <div class="metric-grid">
         <div class="metric-panel">
-          <span>Total PRs</span>
+          <span>Latest scans</span>
           <strong id="metricPrs">0</strong>
         </div>
         <div class="metric-panel">
-          <span>Monthly Delta</span>
+          <span>Monthly cost at risk</span>
           <strong id="metricDelta">EUR 0.00</strong>
         </div>
         <div class="metric-panel">
-          <span>Warned or Blocked</span>
+          <span>Failed cost checks</span>
           <strong id="metricRisk">0</strong>
         </div>
         <div class="metric-panel">
-          <span>Repository</span>
+          <span>Warnings</span>
+          <strong id="metricWarnings">0</strong>
+        </div>
+        <div class="metric-panel">
+          <span>Repositories monitored</span>
           <strong id="metricRepo">-</strong>
+        </div>
+        <div class="metric-panel">
+          <span>Average confidence</span>
+          <strong id="metricConfidence">-</strong>
         </div>
       </div>
 
@@ -178,6 +198,30 @@
             <h2>PR Analyses</h2>
             <button id="refreshAnalysesButton">Refresh</button>
           </div>
+          <div class="filter-bar" aria-label="Scan history filters">
+            <label>
+              Search
+              <input id="analysisSearchInput" type="search" placeholder="Repository or PR number">
+            </label>
+            <label>
+              Status
+              <select id="statusFilter">
+                <option value="">All statuses</option>
+              </select>
+            </label>
+            <label>
+              Decision
+              <select id="decisionFilter">
+                <option value="">All decisions</option>
+              </select>
+            </label>
+            <label>
+              Environment
+              <select id="environmentFilter">
+                <option value="">All environments</option>
+              </select>
+            </label>
+          </div>
           <div class="table-wrap">
             <table>
               <thead>
@@ -203,7 +247,10 @@
 
     <section id="policiesView" class="view">
       <div class="section-heading">
-        <h2>Budgets & Policies</h2>
+        <div>
+          <h2>Budgets & Policies</h2>
+          <p class="section-subtitle">Define simple environment guardrails that future scans use to decide PASS, WARN, or FAIL.</p>
+        </div>
         <div class="button-row">
           <button id="saveBudgetsButton" type="button">Save Budgets</button>
           <button id="savePolicyButton" type="button">Save Policy</button>
@@ -218,6 +265,7 @@
               <th>PR delta limit</th>
               <th>Approval above</th>
               <th>Block</th>
+              <th>Currency</th>
             </tr>
           </thead>
           <tbody id="budgetRows"></tbody>

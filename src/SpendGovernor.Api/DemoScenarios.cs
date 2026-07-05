@@ -142,7 +142,7 @@ public static class DemoScenarios
               name     = "app-plan-dev"
               location = "westeurope"
               os_type  = "Linux"
-              sku_name = "S1"
+              sku_name = "P1v3"
 
               tags = {
                 environment = "dev"
@@ -166,6 +166,18 @@ public static class DemoScenarios
               location   = "westeurope"
               vm_size    = "Standard_B2s"
               node_count = 1
+
+              tags = {
+                environment = "dev"
+              }
+            }
+
+            resource "azurerm_log_analytics_workspace" "platform_logs" {
+              name                = "platform-logs-dev"
+              location            = "westeurope"
+              sku                 = "PerGB2018"
+              retention_in_days   = 30
+              estimated_ingestion_gb_per_month = 50
 
               tags = {
                 environment = "dev"

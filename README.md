@@ -4,12 +4,6 @@ Cloud & AI Spend Governor is an MVP SaaS-style developer tool for PR-time cloud 
 
 It acts as a CI/CD cost firewall: when a pull request changes infrastructure-as-code or AI workflow configuration, the app estimates the monthly cost impact, evaluates budget rules, persists the scan, and reports PASS/WARN/FAIL in the dashboard and GitHub PR feedback.
 
-Suggested GitHub repository description:
-
-```txt
-CI/CD cost firewall for cloud and AI spend. Built with ASP.NET Core, EF Core, SQL Server, GitHub webhooks, Terraform/Bicep analysis, and Azure pricing.
-```
-
 ## Overview
 
 Traditional FinOps dashboards usually explain spend after it has happened. Cloud & AI Spend Governor moves cost visibility earlier, before merge and deploy.
@@ -93,13 +87,14 @@ No screenshots are committed yet. Capture real screenshots after running the loc
 
 Recommended screenshot list:
 
-- Dashboard scan history.
+- Overview dashboard with summary metrics and seeded latest scans.
+- Analyses page with search/filter controls.
 - Cheap PASS scan detail.
-- Expensive cloud FAIL scan detail.
-- Expensive AI workflow scan detail.
-- Pricing metadata and cost breakdown sections.
+- Expensive cloud FAIL scan detail with cost breakdown and recommendation.
+- Expensive AI workflow scan detail with token assumptions.
+- Pricing metadata, ARM/Bicep metadata, and policy evaluation sections.
 - Workspace/project budget page.
-- Simulated or real GitHub PR report.
+- Simulated or real GitHub PR report preview.
 
 See [docs/screenshots.md](docs/screenshots.md).
 

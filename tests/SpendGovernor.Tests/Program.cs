@@ -16,7 +16,7 @@ var tests = new List<(string Name, Action Test)>
     ("Scenario 4 - Unsupported Terraform resource is unknown", ScenarioUnknownResource),
     ("Scenario 5 - Expensive AI workflow triggers policy", ScenarioExpensiveAiWorkflow),
     ("Scenario 6 - Staging budget requires approval", ScenarioApprovalRequired),
-    ("Resource coverage - MVP estimates five Azure resource shapes", ScenarioResourceCoverage),
+    ("Resource coverage - MVP estimates core Azure resource shapes", ScenarioResourceCoverage),
     ("Pricing Catalog v2 loads Azure and AI catalogs", ScenarioPricingCatalogLoadsAndValidates),
     ("Pricing Catalog v2 matches exact and fallback prices", ScenarioPricingCatalogMatchTypes),
     ("Pricing Catalog v2 calculates AI monthly token costs", ScenarioPricingCatalogAiTokenCost),
@@ -318,6 +318,14 @@ static void ScenarioResourceCoverage()
           family   = "C"
           capacity = 0
         }
+
+        resource "azurerm_log_analytics_workspace" "logs" {
+          name               = "app-logs"
+          location           = "westeurope"
+          sku                = "PerGB2018"
+          estimated_gb       = 25
+          retention_in_days  = 30
+        }
         """;
     const string bicep =
         """
@@ -339,7 +347,8 @@ static void ScenarioResourceCoverage()
     ], pr: 7));
 
     var estimatedCount = result.ProposedResources.Count(resource => resource.Status == EstimateStatus.Estimated);
-    Assert(estimatedCount >= 5, $"Expected at least five estimated Azure resources, got {estimatedCount}.");
+    Assert(estimatedCount >= 6, $"Expected at least six estimated Azure resources, got {estimatedCount}.");
+    Assert(result.ProposedResources.Any(resource => resource.ResourceType == "azurerm_log_analytics_workspace" && resource.Status == EstimateStatus.Estimated), "Expected Log Analytics workspace to be estimated.");
 }
 
 static void ScenarioPricingCatalogLoadsAndValidates()

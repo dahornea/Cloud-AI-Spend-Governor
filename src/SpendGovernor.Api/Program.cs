@@ -1107,6 +1107,7 @@ public sealed record AnalysisDetailResponse(
             ProposedMonthlyCost = scan.EstimatedMonthlyDelta is null ? null : Math.Max(0, scan.EstimatedMonthlyDelta.Value),
             MonthlyDelta = scan.EstimatedMonthlyDelta,
             Currency = scan.Currency,
+            CreatedAt = scan.CreatedAt,
             StartedAt = scan.StartedAt,
             CompletedAt = scan.CompletedAt,
             ErrorMessage = scan.FailureReason,

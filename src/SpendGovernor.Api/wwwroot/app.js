@@ -12,6 +12,12 @@ const state = {
   selectedAnalysis: null,
   approvals: [],
   audit: [],
+  filters: {
+    search: "",
+    status: "",
+    decision: "",
+    environment: ""
+  },
   devDemoAvailable: false
 };
 
@@ -47,9 +53,27 @@ function wireEvents() {
     await loadProjectDetail();
   });
   $("runDemoButton").addEventListener("click", runDemo);
+  $("heroRunDemoButton").addEventListener("click", runDemo);
   $("seedDemoButton").addEventListener("click", seedDemoData);
+  $("heroSeedDemoButton").addEventListener("click", seedDemoData);
   $("resetDemoButton").addEventListener("click", resetDemoData);
   $("refreshAnalysesButton").addEventListener("click", loadAnalyses);
+  $("analysisSearchInput").addEventListener("input", (event) => {
+    state.filters.search = event.target.value;
+    renderAnalyses();
+  });
+  $("statusFilter").addEventListener("change", (event) => {
+    state.filters.status = event.target.value;
+    renderAnalyses();
+  });
+  $("decisionFilter").addEventListener("change", (event) => {
+    state.filters.decision = event.target.value;
+    renderAnalyses();
+  });
+  $("environmentFilter").addEventListener("change", (event) => {
+    state.filters.environment = event.target.value;
+    renderAnalyses();
+  });
   $("saveBudgetsButton").addEventListener("click", saveBudgets);
   $("savePolicyButton").addEventListener("click", savePolicy);
   $("refreshAuditButton").addEventListener("click", loadAudit);
@@ -65,9 +89,13 @@ async function initDevDemoControls() {
     const status = await api("/api/dev/demo/status");
     state.devDemoAvailable = Boolean(status.enabled);
     $("devDemoControls").classList.toggle("hidden", !state.devDemoAvailable);
+    $("heroSeedDemoButton").disabled = !state.devDemoAvailable;
+    $("heroSeedDemoButton").textContent = state.devDemoAvailable ? "Seed screenshot demo" : "Seed demo unavailable";
   } catch {
     state.devDemoAvailable = false;
     $("devDemoControls").classList.add("hidden");
+    $("heroSeedDemoButton").disabled = true;
+    $("heroSeedDemoButton").textContent = "Seed demo unavailable";
   }
 }
 
@@ -401,11 +429,13 @@ function renderEmptyWorkspace() {
   $("metricPrs").textContent = "0";
   $("metricDelta").textContent = "EUR 0.00";
   $("metricRisk").textContent = "0";
+  $("metricWarnings").textContent = "0";
   $("metricRepo").textContent = "-";
-  $("repositoryBody").innerHTML = `<tr><td colspan="5">No repositories.</td></tr>`;
-  $("latestAnalysesBody").innerHTML = `<tr><td colspan="9">No project available.</td></tr>`;
+  $("metricConfidence").textContent = "-";
+  $("repositoryBody").innerHTML = emptyRow(5, "No repositories connected", "Create a project or seed demo data to monitor a repository.");
+  $("latestAnalysesBody").innerHTML = emptyRow(9, "No project selected", "Create a project or seed demo data to see cloud and AI spend checks.");
   $("analysesBody").innerHTML = "";
-  $("analysisDetail").innerHTML = "";
+  $("analysisDetail").innerHTML = emptyPanel("Select a project", "Create a project or seed demo data before opening scan details.");
   state.budgets = [];
   renderBudgets();
 }
@@ -418,10 +448,13 @@ function renderOverview() {
   }
 
   const { project, metrics } = detail;
-  $("metricPrs").textContent = metrics.totalPrsAnalyzed;
-  $("metricDelta").textContent = formatMoney(metrics.totalMonthlyDeltaDetected, project.currency, true);
-  $("metricRisk").textContent = metrics.warnedOrBlockedPrs;
-  $("metricRepo").textContent = detail.repositories?.[0]?.fullName || `${project.repositoryOwner}/${project.repositoryName}`;
+  const metricSummary = dashboardMetrics(state.analyses, detail.repositories || [], project.currency);
+  $("metricPrs").textContent = metricSummary.latestScans;
+  $("metricDelta").innerHTML = costDeltaHtml(metricSummary.costAtRisk, project.currency);
+  $("metricRisk").textContent = metricSummary.failed;
+  $("metricWarnings").textContent = metricSummary.warnings;
+  $("metricRepo").textContent = metricSummary.repositories;
+  $("metricConfidence").textContent = metricSummary.averageConfidence;
   renderRepositories(detail.repositories || []);
   $("latestAnalysesBody").innerHTML = tableRows(metrics.latestAnalyses);
   showView(state.view);
@@ -429,113 +462,209 @@ function renderOverview() {
 
 function renderRepositories(repositories) {
   $("repositoryBody").innerHTML = repositories.length === 0
-    ? `<tr><td colspan="5">No repositories.</td></tr>`
+    ? emptyRow(5, "No repositories connected", "Create a project or seed demo data to see repository health.")
     : repositories.map((repository) => `
       <tr>
         <td>${escapeHtml(repository.provider)}</td>
-        <td>${escapeHtml(repository.fullName)}</td>
+        <td><strong>${escapeHtml(repository.fullName)}</strong></td>
         <td>${escapeHtml(repository.defaultBranch || "-")}</td>
-        <td>${escapeHtml(repository.installationId || "-")}</td>
+        <td>${repository.installationId ? escapeHtml(repository.installationId) : '<span class="pill simulated">Simulated/local</span>'}</td>
         <td>${formatDate(repository.lastScanAt)}</td>
       </tr>`).join("");
 }
 
 function renderAnalyses() {
-  $("analysesBody").innerHTML = tableRows(state.analyses);
-  if (!state.selectedAnalysis && state.analyses.length > 0) {
-    loadAnalysis(state.analyses[0].id);
+  renderAnalysisFilters();
+  const filtered = filteredAnalyses();
+  $("analysesBody").innerHTML = tableRows(filtered, "No scans match these filters.", "Clear filters or seed demo data to see PASS/WARN/FAIL examples.");
+  if (!state.selectedAnalysis && filtered.length > 0) {
+    loadAnalysis(filtered[0].id);
   }
 }
 
-function tableRows(items) {
+function tableRows(items, title = "No analyses yet.", message = "Connect a repository or seed demo data to see cloud and AI spend checks before merge.") {
   if (!items || items.length === 0) {
-    return `<tr><td colspan="9">No analyses yet.</td></tr>`;
+    return emptyRow(9, title, message);
   }
 
   return items.map((item) => `
     <tr onclick="loadAnalysis('${item.id}'); showView('analyses')">
-      <td>#${item.pullRequestNumber}</td>
+      <td><strong>#${item.pullRequestNumber}</strong></td>
       <td>${escapeHtml(item.repository)}</td>
       <td>${escapeHtml(item.environment || "-")}</td>
-      <td><span class="pill ${cssToken(item.status)}">${escapeHtml(item.status)}</span></td>
-      <td><span class="pill ${cssToken(item.policyStatus)}">${humanPolicy(item.policyStatus)}</span></td>
-      <td>${formatMoney(item.monthlyDelta, item.currency, true)}</td>
-      <td>${escapeHtml(item.overallConfidence || "-")}</td>
+      <td>${statusBadge(item.status)}</td>
+      <td>${decisionBadge(item.policyStatus)}</td>
+      <td>${costDeltaHtml(item.monthlyDelta, item.currency)}</td>
+      <td>${confidenceBadge(item.overallConfidence)}</td>
       <td>${formatDate(item.createdAt)}</td>
       <td>${formatDate(item.completedAt)}</td>
     </tr>`).join("");
 }
 
+function dashboardMetrics(analyses, repositories, currency) {
+  const confidenceScore = { High: 3, Medium: 2, Low: 1, Unknown: 0 };
+  const confidenceLabel = { 3: "High", 2: "Medium", 1: "Low", 0: "Unknown" };
+  const confidenceValues = (analyses || [])
+    .map((analysis) => confidenceScore[analysis.overallConfidence] ?? 0)
+    .filter((score) => score > 0);
+  const averageScore = confidenceValues.length === 0
+    ? null
+    : Math.round(confidenceValues.reduce((sum, score) => sum + score, 0) / confidenceValues.length);
+  return {
+    latestScans: analyses?.length || 0,
+    costAtRisk: (analyses || [])
+      .filter((analysis) => analysis.policyStatus === "Warn" || analysis.policyStatus === "Block" || analysis.policyStatus === "ApprovalRequired")
+      .reduce((sum, analysis) => sum + Math.max(0, Number(analysis.monthlyDelta || 0)), 0),
+    failed: (analyses || []).filter((analysis) => analysis.policyStatus === "Block" || analysis.policyStatus === "ApprovalRequired").length,
+    warnings: (analyses || []).filter((analysis) => analysis.policyStatus === "Warn").length,
+    repositories: repositories?.length || 0,
+    averageConfidence: averageScore == null ? "-" : `${confidenceLabel[averageScore]} confidence`
+  };
+}
+
+function renderAnalysisFilters() {
+  setOptions("statusFilter", "All statuses", uniqueValues(state.analyses.map((analysis) => analysis.status)), state.filters.status);
+  setOptions("decisionFilter", "All decisions", uniqueValues(state.analyses.map((analysis) => humanPolicy(analysis.policyStatus))), state.filters.decision);
+  setOptions("environmentFilter", "All environments", uniqueValues(state.analyses.map((analysis) => analysis.environment).filter(Boolean)), state.filters.environment);
+}
+
+function setOptions(id, emptyLabel, values, selected) {
+  const select = $(id);
+  const previous = selected || "";
+  select.innerHTML = [`<option value="">${escapeHtml(emptyLabel)}</option>`]
+    .concat(values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`))
+    .join("");
+  select.value = values.includes(previous) ? previous : "";
+  if (id === "statusFilter") {
+    state.filters.status = select.value;
+  } else if (id === "decisionFilter") {
+    state.filters.decision = select.value;
+  } else if (id === "environmentFilter") {
+    state.filters.environment = select.value;
+  }
+}
+
+function uniqueValues(values) {
+  return [...new Set(values.filter((value) => value !== null && value !== undefined && String(value).trim() !== "").map(String))].sort();
+}
+
+function filteredAnalyses() {
+  const query = state.filters.search.trim().toLowerCase();
+  return (state.analyses || []).filter((analysis) => {
+    const decision = humanPolicy(analysis.policyStatus);
+    const repository = String(analysis.repository || "").toLowerCase();
+    const matchesSearch = !query
+      || repository.includes(query)
+      || String(analysis.pullRequestNumber).includes(query)
+      || (analysis.environment || "").toLowerCase().includes(query);
+    return matchesSearch
+      && (!state.filters.status || analysis.status === state.filters.status)
+      && (!state.filters.decision || decision === state.filters.decision)
+      && (!state.filters.environment || analysis.environment === state.filters.environment);
+  });
+}
+
 function renderAnalysisDetail() {
   const detail = state.selectedAnalysis;
   if (!detail) {
-    $("analysisDetail").innerHTML = `<div class="empty-state">Select an analysis.</div>`;
+    $("analysisDetail").innerHTML = emptyPanel("Select an analysis", "Open a scan to review cost drivers, pricing metadata, policy results, and recommendations.");
     return;
   }
 
   const analysis = detail.analysis;
+  const repo = `${analysis.repositoryOwner}/${analysis.repositoryName}`;
   $("analysisDetail").innerHTML = `
-    <h2>PR #${analysis.pullRequestNumber}</h2>
-    <div class="detail-actions">
-      <span class="pill ${cssToken(analysis.status)}">${escapeHtml(analysis.status)}</span>
-      <span class="pill ${cssToken(analysis.policyStatus)}">${humanPolicy(analysis.policyStatus)}</span>
-      <span class="pill">${escapeHtml(detail.analysisSource || "Unknown source")}</span>
-      <button onclick="downloadCsv('${analysis.id}', 'resources')">Resources CSV</button>
-      <button onclick="downloadCsv('${analysis.id}', 'policy-findings')">Findings CSV</button>
-      <button onclick="downloadCsv('${analysis.id}', 'recommendations')">Recommendations CSV</button>
+    <div class="detail-hero">
+      <div>
+        <p class="eyebrow">Scan detail</p>
+        <h2>${escapeHtml(repo)} - PR #${analysis.pullRequestNumber}</h2>
+        <p>${escapeHtml(analysis.headBranch || "-")} -> ${escapeHtml(analysis.baseBranch || "-")} | ${escapeHtml(detail.analysisSource || "Unknown source")}</p>
+      </div>
+      <div class="detail-badges" aria-label="Scan status badges">
+        ${decisionBadge(analysis.policyStatus)}
+        ${statusBadge(analysis.status)}
+        ${confidenceBadge(analysis.overallConfidence)}
+      </div>
     </div>
-    <div class="metric-grid">
-      <div class="metric-panel"><span>Baseline</span><strong>${formatMoney(analysis.baselineMonthlyCost, analysis.currency)}</strong></div>
-      <div class="metric-panel"><span>Proposed</span><strong>${formatMoney(analysis.proposedMonthlyCost, analysis.currency)}</strong></div>
-      <div class="metric-panel"><span>Delta</span><strong>${formatMoney(analysis.monthlyDelta, analysis.currency, true)}</strong></div>
-      <div class="metric-panel"><span>Budget</span><strong>${formatMoney(analysis.budgetLimitMonthly, analysis.currency)}</strong></div>
+    <div class="detail-content">
+      <div class="summary-grid">
+        <div class="summary-card"><span>Estimated monthly delta</span><strong>${costDeltaHtml(analysis.monthlyDelta, analysis.currency)}</strong></div>
+        <div class="summary-card"><span>Environment</span><strong>${escapeHtml(analysis.environment || "-")}</strong></div>
+        <div class="summary-card"><span>Created</span><strong>${formatDate(analysis.createdAt)}</strong></div>
+        <div class="summary-card"><span>Completed</span><strong>${formatDate(analysis.completedAt || analysis.startedAt)}</strong></div>
+        <div class="summary-card"><span>Baseline monthly</span><strong>${formatMoney(analysis.baselineMonthlyCost, analysis.currency)}</strong></div>
+        <div class="summary-card"><span>Proposed monthly</span><strong>${formatMoney(analysis.proposedMonthlyCost, analysis.currency)}</strong></div>
+        <div class="summary-card"><span>Budget limit</span><strong>${formatMoney(analysis.budgetLimitMonthly, analysis.currency)}</strong></div>
+        <div class="summary-card"><span>Unknown resources</span><strong>${analysis.unknownResourceCount}</strong></div>
+      </div>
+      <div class="detail-actions">
+        <button onclick="downloadCsv('${analysis.id}', 'resources')">Resources CSV</button>
+        <button onclick="downloadCsv('${analysis.id}', 'policy-findings')">Findings CSV</button>
+        <button onclick="downloadCsv('${analysis.id}', 'recommendations')">Recommendations CSV</button>
+      </div>
+      ${analysis.errorMessage ? `<div class="status-banner error"><strong>Scan failed</strong><br>${escapeHtml(analysis.errorMessage)}<br>The scan was saved so you can inspect the failure.</div>` : ""}
+      ${renderRecommendations(detail.recommendations, analysis.currency)}
+      ${renderCostChanges(detail.costChanges, detail.resources, analysis.currency)}
+      ${renderResources(detail.resources, analysis.currency)}
+      ${renderArmMetadata(detail.resources, analysis.currency)}
+      ${renderPricingMetadata(detail.resources)}
+      ${renderPolicyEvaluations(detail.policyEvaluations, detail.assumptions)}
+      ${renderFindings(detail.policyFindings)}
+      ${renderAssumptions(detail.assumptions)}
+      ${renderGithubMetadata(detail)}
+      <h3>GitHub PR Report Preview</h3>
+      <pre>${escapeHtml(stripPrMarker(detail.commentMarkdown))}</pre>
     </div>
-    <div class="metric-grid">
-      <div class="metric-panel"><span>Environment</span><strong>${escapeHtml(analysis.environment || "-")}</strong></div>
-      <div class="metric-panel"><span>Confidence</span><strong>${escapeHtml(analysis.overallConfidence || "-")}</strong></div>
-      <div class="metric-panel"><span>Unknown</span><strong>${analysis.unknownResourceCount}</strong></div>
-      <div class="metric-panel"><span>Completed</span><strong>${formatDate(analysis.completedAt || analysis.startedAt)}</strong></div>
-    </div>
-    ${analysis.errorMessage ? `<div class="status-banner error">Failure reason: ${escapeHtml(analysis.errorMessage)}</div>` : ""}
-    ${renderCostChanges(detail.costChanges, analysis.currency)}
-    ${renderResources(detail.resources, analysis.currency)}
-    ${renderArmMetadata(detail.resources, analysis.currency)}
-    ${renderPricingMetadata(detail.resources)}
-    ${renderAssumptions(detail.assumptions)}
-    ${renderPolicyEvaluations(detail.policyEvaluations)}
-    ${renderFindings(detail.policyFindings)}
-    ${renderRecommendations(detail.recommendations, analysis.currency)}
-    ${renderGithubMetadata(detail)}
-    <h3>PR Comment</h3>
-    <pre>${escapeHtml(detail.commentMarkdown)}</pre>
   `;
 }
 
-function renderCostChanges(changes, currency) {
+function renderCostChanges(changes, resources, currency) {
   if (!changes || changes.length === 0) {
-    return "";
+    return `<h3>Main Cost Breakdown</h3>${emptyPanel("No priced cost changes", "This scan did not produce cost breakdown rows.")}`;
   }
 
   return `
-    <h3>Cost Changes</h3>
+    <h3>Main Cost Breakdown</h3>
     <div class="table-wrap"><table>
-      <thead><tr><th>Resource</th><th>Type</th><th>Action</th><th>Before</th><th>After</th><th>Delta</th></tr></thead>
-      <tbody>${changes.map((change) => `
-        <tr><td>${escapeHtml(change.terraformAddress || change.resourceName)}</td><td>${escapeHtml(change.resourceType)}</td><td>${escapeHtml(change.changeKind || "-")}</td><td>${escapeHtml(change.beforeSummary || change.beforeSku || "-")}</td><td>${escapeHtml(change.afterSummary || change.afterSku || "-")}</td><td>${formatMoney(change.monthlyDelta, currency, true)}</td></tr>`).join("")}</tbody>
+      <thead><tr><th>Resource / Workflow</th><th>Change</th><th>Before</th><th>After</th><th>Estimated monthly cost</th><th>Pricing source</th><th>Confidence</th></tr></thead>
+      <tbody>${changes.map((change) => {
+        const resource = findResourceForChange(change, resources);
+        return `
+        <tr>
+          <td><strong>${escapeHtml(change.resourceName || change.terraformAddress || "-")}</strong><br><small>${escapeHtml(change.resourceType || resource?.resourceType || "-")}</small></td>
+          <td>${escapeHtml(formatChange(change.changeKind || resource?.terraformChangeType || resource?.terraformActions || "-"))}</td>
+          <td>${escapeHtml(change.beforeSummary || change.beforeSku || "-")}</td>
+          <td>${escapeHtml(change.afterSummary || change.afterSku || resource?.afterSummary || resource?.sku || "-")}</td>
+          <td>${costDeltaHtml(change.monthlyDelta, currency)}</td>
+          <td>${escapeHtml(change.pricingSource || resource?.pricingSourceType || resource?.pricingSource || "-")}</td>
+          <td>${confidenceBadge(resource?.confidence || "-")}</td>
+        </tr>`;
+      }).join("")}</tbody>
     </table></div>`;
 }
 
 function renderResources(resources, currency) {
   if (!resources || resources.length === 0) {
-    return "";
+    return `<h3>Detected Resources</h3>${emptyPanel("No detected resources", "No cloud resources or AI workflows were detected for this scan.")}`;
   }
 
   return `
-    <h3>Resources</h3>
+    <h3>Detected Resources</h3>
     <div class="table-wrap"><table>
-      <thead><tr><th>Name</th><th>Terraform</th><th>Action</th><th>Type</th><th>SKU</th><th>Region</th><th>Pricing</th><th>Env</th><th>Monthly</th><th>Status</th><th>Confidence</th></tr></thead>
+      <thead><tr><th>Source file</th><th>Analysis source</th><th>Provider</th><th>Resource type</th><th>Name</th><th>SKU / tier / size</th><th>Region</th><th>Change type</th><th>Monthly</th><th>Confidence</th></tr></thead>
       <tbody>${resources.map((resource) => `
-        <tr><td>${escapeHtml(resource.resourceName)}</td><td>${escapeHtml(resource.terraformAddress || "-")}</td><td>${escapeHtml(resource.terraformChangeType || resource.terraformActions || "-")}</td><td>${escapeHtml(resource.resourceType)}</td><td>${escapeHtml(resource.sku || resource.afterSummary || "-")}</td><td>${escapeHtml(resource.region || "-")}</td><td>${escapeHtml(resource.pricingMatchType || "-")}</td><td>${escapeHtml(resource.environment || "-")}</td><td>${formatMoney(resource.monthlyCost, currency)}</td><td>${escapeHtml(resource.status)}</td><td>${escapeHtml(resource.confidence || "-")}</td></tr>`).join("")}</tbody>
+        <tr>
+          <td>${escapeHtml(resource.sourceFile || "-")}</td>
+          <td>${escapeHtml(resource.analysisSource || sourceTypeLabel(resource.sourceType))}</td>
+          <td>${escapeHtml(resource.provider || "-")}</td>
+          <td>${escapeHtml(resource.resourceType || resource.armResourceType || "-")}</td>
+          <td><strong>${escapeHtml(resource.resourceName || "-")}</strong></td>
+          <td>${escapeHtml(resource.sku || resource.afterSummary || "-")}</td>
+          <td>${escapeHtml(resource.region || "-")}</td>
+          <td>${escapeHtml(formatChange(resource.terraformChangeType || resource.terraformActions || "added/desired state"))}</td>
+          <td>${formatMoney(resource.monthlyCost, currency)}</td>
+          <td>${confidenceBadge(resource.confidence)}</td>
+        </tr>`).join("")}</tbody>
     </table></div>`;
 }
 
@@ -554,22 +683,22 @@ function renderPricingMetadata(resources) {
   const fallbackUsed = priced.some((resource) => resource.pricingFallbackUsed);
   return `
     <h3>Pricing Metadata</h3>
-    <div class="list-panel">
-      <div><strong>Catalog</strong><br>${escapeHtml(first.pricingCatalogName || "-")} ${escapeHtml(first.pricingCatalogVersion || "")}</div>
-      <div><strong>Source</strong><br>${escapeHtml(first.pricingSourceType || first.pricingSource || "-")}</div>
-      <div><strong>Live API Used</strong><br>${liveApiUsed ? "yes" : "no"}</div>
-      <div><strong>Currency</strong><br>${escapeHtml(first.currency || "-")}</div>
-      <div><strong>Region</strong><br>${escapeHtml(first.region || "-")}</div>
-      <div><strong>Unit Price</strong><br>${first.pricingUnitPrice == null ? "-" : `${formatMoney(first.pricingUnitPrice, first.currency || "EUR")} / ${escapeHtml(unit)}`}</div>
-      <div><strong>Monthly Conversion</strong><br>${escapeHtml((first.pricingMonthlyHours || first.hoursPerMonth) ? `${first.pricingMonthlyHours || first.hoursPerMonth} hours/month` : unit)}</div>
-      <div><strong>Meter</strong><br>${escapeHtml(first.pricingMeterName || first.pricingMeterId || "-")}</div>
-      <div><strong>Product</strong><br>${escapeHtml(first.pricingProductName || "-")}</div>
-      <div><strong>SKU</strong><br>${escapeHtml(first.pricingArmSkuName || first.pricingSkuName || first.sku || "-")}</div>
-      <div><strong>Match Quality</strong><br>${escapeHtml(matchTypes || "-")}</div>
-      <div><strong>Fallback Used</strong><br>${fallbackUsed ? "yes" : "no"}</div>
-      ${first.pricingEffectiveStartDate ? `<div><strong>Effective Start</strong><br>${formatDate(first.pricingEffectiveStartDate)}</div>` : ""}
-      ${fallback ? `<div><strong>Fallback</strong><br>${escapeHtml(fallback.pricingFallbackReason)}</div>` : ""}
-      ${ai ? `<div><strong>AI Model Pricing</strong><br>${escapeHtml(ai.sku || "-")} - ${escapeHtml(ai.pricingUnit || "1M tokens")}</div>` : ""}
+    <div class="list-panel metadata-grid">
+      ${metadataItem("Pricing source", first.pricingSourceType || first.pricingSource || "-")}
+      ${metadataItem("Catalog version", `${first.pricingCatalogName || "-"} ${first.pricingCatalogVersion || ""}`.trim())}
+      ${metadataItem("Azure Retail Prices API used", liveApiUsed ? "yes" : "no")}
+      ${metadataItem("Currency", first.currency || "-")}
+      ${metadataItem("Region", first.region || "-")}
+      ${metadataItem("Unit price", first.pricingUnitPrice == null ? "-" : `${formatMoney(first.pricingUnitPrice, first.currency || "EUR")} / ${unit}`)}
+      ${metadataItem("Monthly hours assumption", (first.pricingMonthlyHours || first.hoursPerMonth) ? `${first.pricingMonthlyHours || first.hoursPerMonth} hours/month` : "-")}
+      ${metadataItem("Meter", first.pricingMeterName || first.pricingMeterId || "-")}
+      ${metadataItem("Product", first.pricingProductName || "-")}
+      ${metadataItem("SKU", first.pricingArmSkuName || first.pricingSkuName || first.sku || "-")}
+      ${metadataItem("Match type", matchTypes || "-")}
+      ${metadataItem("Fallback used", fallbackUsed ? "yes" : "no")}
+      ${first.pricingEffectiveStartDate ? metadataItem("Effective start", formatDate(first.pricingEffectiveStartDate)) : ""}
+      ${fallback ? metadataItem("Fallback reason", fallback.pricingFallbackReason) : ""}
+      ${ai ? metadataItem("AI model pricing", `${ai.sku || "-"} - ${ai.pricingUnit || "1M tokens"}`) : ""}
     </div>`;
 }
 
@@ -587,7 +716,7 @@ function renderArmMetadata(resources, currency) {
       const unresolved = (raw.armUnresolvedExpressions || []).map((item) => `${item.field}: ${item.expression}`).join("; ");
       return `
         <div>
-          <strong>${escapeHtml(resource.resourceName)}</strong><br>
+          <strong>${escapeHtml(resource.resourceName || "-")}</strong><br>
           Source ${escapeHtml(resource.sourceFile || "-")}<br>
           ARM ${escapeHtml(resource.armResourceType || "-")} -> ${escapeHtml(resource.mappedResourceType || resource.resourceType || "-")}<br>
           Location ${escapeHtml(resource.region || "-")} - SKU ${escapeHtml(resource.sku || "-")} - API ${escapeHtml(resource.armApiVersion || "-")} - Kind ${escapeHtml(resource.armKind || "-")}<br>
@@ -618,7 +747,7 @@ function parseJson(value) {
 
 function renderFindings(findings) {
   if (!findings || findings.length === 0) {
-    return "<h3>Policy Findings</h3><div class=\"empty-state\">No policy findings.</div>";
+    return `<h3>Policy Findings</h3>${emptyPanel("No policy findings", "The scan did not produce warning or blocking findings.")}`;
   }
 
   return `
@@ -629,7 +758,7 @@ function renderFindings(findings) {
 
 function renderAssumptions(assumptions) {
   if (!assumptions || assumptions.length === 0) {
-    return "";
+    return `<h3>Assumptions</h3>${emptyPanel("No assumptions saved", "This scan did not persist analyzer or pricing assumptions.")}`;
   }
 
   return `
@@ -641,17 +770,18 @@ function renderAssumptions(assumptions) {
     </table></div>`;
 }
 
-function renderPolicyEvaluations(evaluations) {
+function renderPolicyEvaluations(evaluations, assumptions) {
   if (!evaluations || evaluations.length === 0) {
-    return "";
+    return `<h3>Policy Evaluations</h3>${emptyPanel("No policy evaluations", "No policy rules were evaluated for this scan.")}`;
   }
 
+  const budgetSource = assumptionValue(assumptions, "BudgetSource") || "-";
   return `
     <h3>Policy Evaluations</h3>
     <div class="table-wrap"><table>
-      <thead><tr><th>Rule</th><th>Result</th><th>Message</th></tr></thead>
+      <thead><tr><th>Rule</th><th>Result</th><th>Budget source</th><th>Message</th></tr></thead>
       <tbody>${evaluations.map((item) => `
-        <tr><td>${escapeHtml(item.ruleName)}</td><td>${escapeHtml(item.result)}</td><td>${escapeHtml(item.message)}</td></tr>`).join("")}</tbody>
+        <tr><td>${escapeHtml(item.ruleName)}</td><td>${policyResultBadge(item.result)}</td><td>${escapeHtml(budgetSource)}</td><td>${escapeHtml(item.message)}</td></tr>`).join("")}</tbody>
     </table></div>`;
 }
 
@@ -668,25 +798,32 @@ function renderGithubMetadata(detail) {
     : "-";
   return `
     <h3>GitHub</h3>
+    ${detail.reportPublishingStatus === "Simulated" ? `<div class="callout-panel"><strong>Simulated GitHub mode</strong><br>This local demo stored an idempotent simulated PR report instead of calling GitHub.</div>` : ""}
     <div class="list-panel">
-      <div><strong>PR</strong><br>${pr}</div>
-      <div><strong>Report URL</strong><br>${report}</div>
-      <div><strong>Publishing Status</strong><br><span class="pill ${cssToken(detail.reportPublishingStatus || "Pending")}">${escapeHtml(detail.reportPublishingStatus || "Pending")}</span></div>
-      <div><strong>Comment ID</strong><br>${escapeHtml(detail.gitHubCommentId || "-")}</div>
-      <div><strong>Check Run ID</strong><br>${escapeHtml(detail.gitHubCheckRunId || "-")}</div>
-      ${detail.reportPublishingError ? `<div><strong>Publishing Error</strong><br>${escapeHtml(detail.reportPublishingError)}</div>` : ""}
+      ${metadataItem("GitHub PR", pr, true)}
+      ${metadataItem("Report URL", report, true)}
+      ${metadataItem("Publishing status", `<span class="pill ${cssToken(detail.reportPublishingStatus || "Pending")}">${escapeHtml(detail.reportPublishingStatus || "Pending")}</span>`, true)}
+      ${metadataItem("Comment ID", detail.gitHubCommentId || "-")}
+      ${metadataItem("Check Run ID", detail.gitHubCheckRunId || "-")}
+      ${detail.reportPublishingError ? metadataItem("Publishing error", detail.reportPublishingError) : ""}
     </div>`;
 }
 
 function renderRecommendations(recommendations, currency) {
   if (!recommendations || recommendations.length === 0) {
-    return "";
+    return `<div class="recommendation-panel"><h3>Recommendation</h3><div>No blocking action needed.</div></div>`;
   }
 
   return `
-    <h3>Recommendations</h3>
-    <div class="list-panel">${recommendations.map((rec) => `
-      <div><strong>${escapeHtml(rec.title)}</strong><br>${escapeHtml(rec.description)} ${rec.estimatedMonthlySavings ? `Impact ${formatMoney(rec.estimatedMonthlySavings, currency)}.` : ""}</div>`).join("")}</div>`;
+    <div class="recommendation-panel">
+      <h3>Recommendation</h3>
+      <div class="recommendation-list">${recommendations.map((rec) => `
+        <div class="recommendation-item">
+          <strong>${escapeHtml(rec.title)}</strong><br>
+          ${escapeHtml(rec.description)}
+          ${rec.estimatedMonthlySavings ? `<br><small>Estimated savings opportunity: ${formatMoney(rec.estimatedMonthlySavings, currency)} / month</small>` : ""}
+        </div>`).join("")}</div>
+    </div>`;
 }
 
 function renderPolicyValidation(errors) {
@@ -709,11 +846,12 @@ function renderBudgets() {
     };
     return `
       <tr data-budget-env="${escapeHtml(environment)}">
-        <td>${escapeHtml(environment)}</td>
+        <td><span class="pill ${cssToken(environment)}">${escapeHtml(environment)}</span></td>
         <td><input data-budget-cost type="number" min="0" step="1" value="${inputValue(budget.maxMonthlyCost)}"></td>
         <td><input data-budget-delta type="number" min="0" step="1" value="${inputValue(budget.maxMonthlyDelta)}"></td>
         <td><input data-budget-approval type="number" min="0" step="1" value="${inputValue(budget.requireApprovalAbove)}"></td>
-        <td><input data-budget-block type="checkbox" ${budget.blockOnBudgetExceeded ? "checked" : ""}></td>
+        <td><input data-budget-block aria-label="Block ${escapeHtml(environment)} budget overages" type="checkbox" ${budget.blockOnBudgetExceeded ? "checked" : ""}></td>
+        <td>${escapeHtml(budget.currency || state.projectDetail?.project?.currency || "EUR")}</td>
       </tr>`;
   }).join("");
 }
@@ -764,8 +902,19 @@ function formatMoney(value, currency, signed = false) {
     return "not available";
   }
 
-  const sign = signed && value > 0 ? "+" : "";
-  return `${sign}${currency || "EUR"} ${Number(value).toFixed(2)}`;
+  const numeric = Number(value);
+  const sign = signed && numeric > 0 ? "+" : signed && numeric < 0 ? "-" : "";
+  return `${sign}${currency || "EUR"} ${Math.abs(numeric).toFixed(2)}`;
+}
+
+function costDeltaHtml(value, currency) {
+  if (value === null || value === undefined) {
+    return `<span class="cost-delta">not available</span>`;
+  }
+
+  const numeric = Number(value);
+  const css = numeric > 0 ? "positive" : numeric < 0 ? "negative" : "zero";
+  return `<span class="cost-delta ${css}">${formatMoney(numeric, currency, true)} / month</span>`;
 }
 
 function humanPolicy(value) {
@@ -785,6 +934,27 @@ function humanPolicy(value) {
   return normalized.replace("ApprovalRequired", "APPROVAL REQUIRED");
 }
 
+function statusBadge(value) {
+  const label = String(value || "Unknown");
+  return `<span class="pill ${cssToken(label)}">Status: ${escapeHtml(label)}</span>`;
+}
+
+function decisionBadge(value) {
+  const label = humanPolicy(value);
+  const css = label === "FAIL" ? "fail" : label.toLowerCase();
+  return `<span class="pill ${cssToken(css)}">Decision: ${escapeHtml(label)}</span>`;
+}
+
+function confidenceBadge(value) {
+  const label = String(value || "Unknown");
+  return `<span class="pill ${cssToken(label)}">${escapeHtml(label)} confidence</span>`;
+}
+
+function policyResultBadge(value) {
+  const label = String(value || "Unknown");
+  return `<span class="pill ${cssToken(label)}">${escapeHtml(label)}</span>`;
+}
+
 function cssToken(value) {
   return String(value || "").toLowerCase().replace(/[^a-z]/g, "");
 }
@@ -795,6 +965,65 @@ function shortSha(value) {
 
 function formatDate(value) {
   return value ? new Date(value).toLocaleString() : "-";
+}
+
+function formatChange(value) {
+  const text = String(value || "-");
+  const normalized = text.toLowerCase();
+  if (normalized === "added" || normalized === "create") {
+    return "Added";
+  }
+
+  if (normalized === "removed" || normalized === "delete") {
+    return "Removed";
+  }
+
+  if (normalized === "changed" || normalized === "modified" || normalized === "update") {
+    return "Modified";
+  }
+
+  return text;
+}
+
+function sourceTypeLabel(value) {
+  const text = String(value || "");
+  if (text === "AiConfig") {
+    return "AI workflow config";
+  }
+
+  if (text === "TerraformPlanJson") {
+    return "Terraform plan JSON";
+  }
+
+  return text || "-";
+}
+
+function findResourceForChange(change, resources) {
+  return (resources || []).find((resource) =>
+    resource.resourceName === change.resourceName
+    || resource.terraformAddress === change.terraformAddress
+    || resource.resourceType === change.resourceType);
+}
+
+function assumptionValue(assumptions, name) {
+  const match = (assumptions || []).find((assumption) => assumption.name === name);
+  return match?.value || null;
+}
+
+function metadataItem(label, value, isHtml = false) {
+  return `<div class="metadata-item"><strong>${escapeHtml(label)}</strong>${isHtml ? value : escapeHtml(value ?? "-")}</div>`;
+}
+
+function emptyPanel(title, message) {
+  return `<div class="empty-state"><strong>${escapeHtml(title)}</strong>${escapeHtml(message || "")}</div>`;
+}
+
+function emptyRow(colspan, title, message) {
+  return `<tr><td colspan="${colspan}">${emptyPanel(title, message)}</td></tr>`;
+}
+
+function stripPrMarker(markdown) {
+  return String(markdown || "").replace("<!-- cloud-ai-spend-governor-report -->", "").trim();
 }
 
 function readNumber(value) {
