@@ -1,0 +1,94 @@
+name: Cloud & AI Spend Governor
+description: Run Cloud & AI Spend Governor cost checks in GitHub Actions without deploying the web app.
+
+inputs:
+  path:
+    description: Proposed repository/worktree path to scan.
+    required: false
+    default: "."
+  baseline-path:
+    description: Optional baseline directory for before/after comparisons.
+    required: false
+    default: ""
+  markdown-report:
+    description: Path for the Markdown report artifact.
+    required: false
+    default: "spendgov-report.md"
+  json-report:
+    description: Path for the JSON report artifact.
+    required: false
+    default: "spendgov-report.json"
+  fail-on:
+    description: Exit non-zero on fail, warn, or never.
+    required: false
+    default: "fail"
+  repository:
+    description: Repository identity, such as owner/name.
+    required: false
+    default: ""
+  pr-number:
+    description: Pull Request number.
+    required: false
+    default: "0"
+  base-branch:
+    description: Base branch name.
+    required: false
+    default: "main"
+  head-branch:
+    description: Head branch name.
+    required: false
+    default: "local"
+  commit-sha:
+    description: Commit SHA for report metadata.
+    required: false
+    default: "local"
+
+outputs:
+  markdown-report:
+    description: Markdown report path.
+    value: ${{ inputs.markdown-report }}
+  json-report:
+    description: JSON report path.
+    value: ${{ inputs.json-report }}
+
+runs:
+  using: composite
+  steps:
+    - name: Run spendgov CLI
+      shell: bash
+      env:
+        SPENDGOV_PATH: ${{ inputs.path }}
+        SPENDGOV_BASELINE_PATH: ${{ inputs.baseline-path }}
+        SPENDGOV_MARKDOWN_REPORT: ${{ inputs.markdown-report }}
+        SPENDGOV_JSON_REPORT: ${{ inputs.json-report }}
+        SPENDGOV_FAIL_ON: ${{ inputs.fail-on }}
+        SPENDGOV_REPOSITORY: ${{ inputs.repository }}
+        SPENDGOV_PR_NUMBER: ${{ inputs.pr-number }}
+        SPENDGOV_BASE_BRANCH: ${{ inputs.base-branch }}
+        SPENDGOV_HEAD_BRANCH: ${{ inputs.head-branch }}
+        SPENDGOV_COMMIT_SHA: ${{ inputs.commit-sha }}
+      run: |
+        set -euo pipefail
+
+        cli_project="${GITHUB_ACTION_PATH}/../../../src/SpendGovernor.Cli/SpendGovernor.Cli.csproj"
+        args=(
+          scan
+          --path "${SPENDGOV_PATH}"
+          --markdown "${SPENDGOV_MARKDOWN_REPORT}"
+          --json "${SPENDGOV_JSON_REPORT}"
+          --fail-on "${SPENDGOV_FAIL_ON}"
+          --pr-number "${SPENDGOV_PR_NUMBER}"
+          --base-branch "${SPENDGOV_BASE_BRANCH}"
+          --head-branch "${SPENDGOV_HEAD_BRANCH}"
+          --commit-sha "${SPENDGOV_COMMIT_SHA}"
+        )
+
+        if [[ -n "${SPENDGOV_BASELINE_PATH}" ]]; then
+          args+=(--baseline-path "${SPENDGOV_BASELINE_PATH}")
+        fi
+
+        if [[ -n "${SPENDGOV_REPOSITORY}" ]]; then
+          args+=(--repository "${SPENDGOV_REPOSITORY}")
+        fi
+
+        dotnet run --project "${cli_project}" -- "${args[@]}"

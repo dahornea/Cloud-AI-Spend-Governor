@@ -62,6 +62,16 @@ Seeded scenarios:
 dotnet run --project tests\SpendGovernor.Tests\SpendGovernor.Tests.csproj
 ```
 
+## Run The CLI
+
+The CLI runs the same scan engine without starting the web app:
+
+```powershell
+dotnet run --project src\SpendGovernor.Cli\SpendGovernor.Cli.csproj -- scan --path demo\scenario-expensive-cloud-change --markdown artifacts\spendgov-report.md --json artifacts\spendgov-report.json --fail-on never
+```
+
+Use `--fail-on fail` in CI when a blocking policy decision should fail the job. See [cli.md](cli.md).
+
 ## GitHub Simulated Mode
 
 Local config defaults to simulated GitHub reporting. Dashboard/demo scans do not require GitHub secrets.

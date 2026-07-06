@@ -8,6 +8,7 @@
 - [ ] Architecture diagram screenshot included.
 - [x] Sample PR report exists.
 - [x] Demo walkthrough exists.
+- [x] CLI and local GitHub Action usage are documented.
 - [x] CV bullets are documented.
 - [x] Local setup instructions work.
 - [x] Database migration instructions are documented.

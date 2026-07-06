@@ -27,6 +27,7 @@ coverage*/
 # Logs and local runtime output
 *.log
 logs/
+artifacts/
 api.out.log
 api.err.log
 

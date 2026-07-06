@@ -4,6 +4,8 @@ Cloud & AI Spend Governor is an MVP SaaS-style developer tool for PR-time cloud 
 
 It acts as a CI/CD cost firewall: when a pull request changes infrastructure-as-code or AI workflow configuration, the app estimates the monthly cost impact, evaluates budget rules, persists the scan, and reports PASS/WARN/FAIL in the dashboard and GitHub PR feedback.
 
+The project also includes a `spendgov` .NET CLI and local GitHub Action wrapper, so the same checks can run in CI without deploying the web app.
+
 ## Overview
 
 Traditional FinOps dashboards usually explain spend after it has happened. Cloud & AI Spend Governor moves cost visibility earlier, before merge and deploy.
@@ -31,6 +33,7 @@ Cloud & AI Spend Governor analyzes PR inputs and answers:
 ```mermaid
 flowchart TD
     A["Developer opens Pull Request or runs local demo"] --> B["ASP.NET Core API"]
+    CLI["spendgov CLI / GitHub Action"] --> F
     B --> C["Webhook signature verification when using GitHub"]
     C --> D["PullRequestScan row created as Queued"]
     D --> E["Channel scan queue and background worker"]
@@ -51,6 +54,7 @@ Manual dashboard/demo scans use the same scan execution service synchronously so
 - EF Core with SQL Server LocalDB for local development.
 - SQL Server container support through Docker Compose.
 - GitHub webhook receiver plus simulated and real GitHub App PR reporting modes.
+- `spendgov` .NET CLI and local composite GitHub Action wrapper for CI-native scans.
 - Terraform plan JSON, raw Terraform, Bicep compiled ARM JSON, raw Bicep, and AI workflow analyzers.
 - Versioned local pricing catalogs with optional Azure Retail Prices API lookup.
 - GitHub Actions CI, Docker packaging, health checks, request correlation IDs, and structured console logging.
@@ -68,6 +72,7 @@ See [docs/architecture.md](docs/architecture.md) for the detailed system archite
 - Cost breakdown rows, detected resources, assumptions, and policy evaluations per scan.
 - PASS/WARN/FAIL policy decisions from `.spendgov.yml` and project budgets.
 - GitHub PR report rendering with idempotent simulated/real publishing.
+- CLI Markdown/JSON reports with CI exit codes for policy failures.
 - CSV exports for resources, policy findings, recommendations, and project summaries.
 - Health endpoint at `GET /health`.
 
@@ -76,6 +81,7 @@ See [docs/architecture.md](docs/architecture.md) for the detailed system archite
 - Unified scan execution path for dashboard, demo, rerun, and queued webhook processing.
 - EF Core persistence model for workspaces, projects, repositories, scans, cost breakdowns, detected resources, assumptions, policy evaluations, and GitHub publishing metadata.
 - Analyzer priority favors structured artifacts: Terraform plan JSON first, then Bicep compiled ARM JSON, with pragmatic raw IaC fallbacks.
+- CI-native CLI reuses the same scan engine and report renderer as the web app.
 - Explainable pricing metadata: catalog version/source, Azure Retail source, match type, fallback reason, region, SKU, and confidence impact.
 - GitHub reporting preserves scan data even when PR publishing fails.
 - Scenario test suite covers analyzers, pricing, confidence, policy, persistence, GitHub signatures/reporting, and queue behavior.
@@ -136,6 +142,18 @@ dotnet run --project src\SpendGovernor.Api\SpendGovernor.Api.csproj --urls http:
 Open http://localhost:5102 and register a local user, or use the development fallback user `demo@spendgov.local`.
 
 Detailed setup: [docs/local-development.md](docs/local-development.md).
+
+## CLI / GitHub Actions
+
+Run the same cost checks without starting the web app:
+
+```powershell
+dotnet run --project src\SpendGovernor.Cli\SpendGovernor.Cli.csproj -- scan --path demo\scenario-expensive-cloud-change --markdown artifacts\spendgov-report.md --json artifacts\spendgov-report.json --fail-on never
+```
+
+The CLI reads `.spendgov.yml`, detects Terraform Plan JSON, Bicep/ARM JSON, raw Terraform/Bicep, and AI workflow files, then writes Markdown and JSON reports.
+
+The local composite Action lives at `.github/actions/spendgov/action.yml`. See [docs/cli.md](docs/cli.md).
 
 ## Docker Setup
 
@@ -204,6 +222,7 @@ The test project is a console scenario runner rather than an xUnit project. CI r
 ```txt
 src/
   SpendGovernor.Api/              ASP.NET Core API, static dashboard, demo data, GitHub integration, scan worker
+  SpendGovernor.Cli/              .NET CLI for local and GitHub Actions cost checks
   SpendGovernor.Core/             Domain model, analyzers, pricing, policy, PR report rendering
   SpendGovernor.Infrastructure/   EF Core persistence, migrations, repositories, pricing catalog services
 
@@ -217,6 +236,7 @@ demo/
 
 docs/
   architecture.md
+  cli.md
   demo-walkthrough.md
   sample-pr-report.md
   cv-bullets.md

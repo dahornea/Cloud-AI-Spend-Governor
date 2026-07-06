@@ -1,9 +1,11 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Net;
 using Microsoft.Extensions.Options;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using SpendGovernor.Cli;
 using SpendGovernor.Core;
 using SpendGovernor.Infrastructure.Persistence;
 using SpendGovernor.Infrastructure.Services;
@@ -30,6 +32,8 @@ var tests = new List<(string Name, Action Test)>
     ("Azure Retail hybrid falls back to local catalog", ScenarioAzureRetailHybridFallback),
     ("Azure Retail metadata appears in reports and dashboard", () => ScenarioAzureRetailMetadataReportAndDashboard().GetAwaiter().GetResult()),
     ("Azure Retail region normalization and candidate mapping", ScenarioAzureRetailRegionAndMapping),
+    ("CLI emits Markdown and JSON reports", () => ScenarioCliEmitsMarkdownAndJson().GetAwaiter().GetResult()),
+    ("CLI returns non-zero when policy fails", () => ScenarioCliPolicyExitCode().GetAwaiter().GetResult()),
     ("Terraform plan JSON files are detected", ScenarioTerraformPlanJsonDetection),
     ("Terraform plan JSON parser maps resource actions", ScenarioTerraformPlanJsonActionMapping),
     ("Terraform plan JSON parser extracts Azure pricing fields", ScenarioTerraformPlanJsonAzureExtraction),
@@ -797,6 +801,118 @@ static void ScenarioAzureRetailRegionAndMapping()
     Assert(region == "westeurope", "Expected candidate mapper to normalize region.");
     Assert(candidates.Any(candidate => candidate.Filter.Contains("Azure Cache for Redis", StringComparison.Ordinal)), "Expected Redis service candidate.");
     Assert(candidates.Any(candidate => candidate.Filter.Contains("P1", StringComparison.Ordinal)), "Expected Redis P1 SKU/meter candidate.");
+}
+
+static async Task ScenarioCliEmitsMarkdownAndJson()
+{
+    var root = CreateCliFixture();
+    var markdown = Path.Combine(root, "artifacts", "spendgov-report.md");
+    var json = Path.Combine(root, "artifacts", "spendgov-report.json");
+    var exitCode = await RunCli([
+        "scan",
+        "--path", root,
+        "--markdown", markdown,
+        "--json", json,
+        "--fail-on", "never",
+        "--repository", "acme/shop-api",
+        "--pr-number", "42",
+        "--head-branch", "feature/dev-premium-redis",
+        "--commit-sha", "test123"
+    ]);
+
+    Assert(exitCode == 0, $"Expected fail-on never to exit 0, got {exitCode}.");
+    Assert(File.Exists(markdown), "Expected CLI markdown report file.");
+    Assert(File.Exists(json), "Expected CLI JSON report file.");
+    var markdownText = await File.ReadAllTextAsync(markdown);
+    Assert(markdownText.Contains("Cloud & AI Spend Governor Report", StringComparison.Ordinal), "Expected PR markdown report heading.");
+    Assert(markdownText.Contains("Status: FAIL", StringComparison.Ordinal), "Expected expensive fixture to fail policy in markdown.");
+
+    using var document = JsonDocument.Parse(await File.ReadAllTextAsync(json));
+    var rootElement = document.RootElement;
+    Assert(rootElement.GetProperty("decision").GetString() == "FAIL", "Expected JSON decision FAIL.");
+    Assert(rootElement.GetProperty("repository").GetString() == "acme/shop-api", "Expected repository metadata in JSON.");
+    Assert(rootElement.GetProperty("resources").GetArrayLength() > 0, "Expected JSON resources.");
+}
+
+static async Task ScenarioCliPolicyExitCode()
+{
+    var root = CreateCliFixture();
+    var exitCode = await RunCli([
+        "scan",
+        "--path", root,
+        "--markdown", Path.Combine(root, "report.md"),
+        "--json", Path.Combine(root, "report.json"),
+        "--fail-on", "fail",
+        "--repository", "acme/shop-api",
+        "--pr-number", "42",
+        "--head-branch", "feature/dev-premium-redis"
+    ]);
+
+    Assert(exitCode == 2, $"Expected policy failure exit code 2, got {exitCode}.");
+}
+
+static async Task<int> RunCli(string[] args)
+{
+    using var output = new StringWriter();
+    using var error = new StringWriter();
+    var exitCode = await SpendGovCliRunner.RunAsync(args, output, error);
+    if (exitCode is not (0 or 2))
+    {
+        throw new InvalidOperationException($"Unexpected CLI exit code {exitCode}. Output: {output} Error: {error}");
+    }
+
+    return exitCode;
+}
+
+static string CreateCliFixture()
+{
+    var root = Path.Combine(Path.GetTempPath(), "spendgov-cli-tests", Guid.NewGuid().ToString("n"));
+    var infra = Path.Combine(root, "infra");
+    Directory.CreateDirectory(infra);
+    File.WriteAllText(Path.Combine(root, ".spendgov.yml"), """
+        version: 1
+        currency: EUR
+        defaultRegion: westeurope
+        hoursPerMonth: 730
+
+        rules:
+          - id: dev-delta-limit
+            description: Block dev PRs above 100 EUR/month
+            type: monthly_delta
+            threshold: 100
+            action: block
+
+        environments:
+          dev:
+            monthlyBudget: 100
+            action: block
+        """);
+    File.WriteAllText(Path.Combine(infra, "main.tf"), """
+        resource "azurerm_service_plan" "app_plan" {
+          name     = "app-plan-dev"
+          location = "westeurope"
+          os_type  = "Linux"
+          sku_name = "P1v3"
+
+          tags = {
+            environment = "dev"
+          }
+        }
+
+        resource "azurerm_redis_cache" "session_cache" {
+          name     = "session-cache-dev"
+          location = "westeurope"
+          capacity = 1
+          family   = "P"
+          sku_name = "Premium"
+
+          tags = {
+            environment = "dev"
+          }
+        }
+        """);
+
+    return root;
 }
 
 static void ScenarioTerraformPlanJsonDetection()
