@@ -83,34 +83,38 @@ See [docs/architecture.md](docs/architecture.md) for the detailed system archite
 
 ## Screenshots
 
-No screenshots are committed yet. Capture real screenshots after running the local demo and place them in `docs/assets/`.
+Screenshots are intended to be captured after running the local demo seed. No screenshots are committed yet, and the repository does not include fabricated images.
 
-Recommended screenshot list:
+Expected assets:
 
-- Overview dashboard with summary metrics and seeded latest scans.
-- Analyses page with search/filter controls.
-- Cheap PASS scan detail.
-- Expensive cloud FAIL scan detail with cost breakdown and recommendation.
-- Expensive AI workflow scan detail with token assumptions.
-- Pricing metadata, ARM/Bicep metadata, and policy evaluation sections.
-- Workspace/project budget page.
-- Simulated or real GitHub PR report preview.
+- `docs/assets/landing-page.png`
+- `docs/assets/dashboard-overview.png`
+- `docs/assets/scan-history.png`
+- `docs/assets/scan-detail-expensive-cloud.png`
+- `docs/assets/scan-detail-ai-workflow.png`
+- `docs/assets/pricing-metadata.png`
+- `docs/assets/github-pr-report-preview.png`
+- `docs/assets/environment-budgets.png`
+- `docs/assets/architecture-diagram.png`
 
-See [docs/screenshots.md](docs/screenshots.md).
+See [docs/screenshots.md](docs/screenshots.md) for the capture checklist.
 
-## Demo Script
+## Demo Walkthrough
 
-Use the 3-5 minute walkthrough in [docs/demo-script.md](docs/demo-script.md).
+This repository uses a screenshot-based demo walkthrough for portfolio review.
+
+See [docs/demo-walkthrough.md](docs/demo-walkthrough.md).
 
 Short version:
 
-1. Open the dashboard at http://localhost:5102.
-2. Seed demo data.
-3. Show latest scans.
-4. Open the cheap cloud change and explain PASS.
-5. Open the expensive cloud change and explain FAIL.
-6. Open the expensive AI workflow and explain token-based cost estimation.
-7. Show the generated PR report shape and explain simulated/real GitHub modes.
+1. Open the public landing page at http://localhost:5102.
+2. Open the dashboard at http://localhost:5102/dashboard.
+3. Seed demo data.
+4. Show latest scans.
+5. Open the cheap cloud change and explain PASS.
+6. Open the expensive cloud change and explain FAIL.
+7. Open the expensive AI workflow and explain token-based cost estimation.
+8. Show the generated PR report shape and explain simulated/real GitHub modes.
 
 ## Local Development
 
@@ -213,7 +217,7 @@ demo/
 
 docs/
   architecture.md
-  demo-script.md
+  demo-walkthrough.md
   sample-pr-report.md
   cv-bullets.md
   roadmap.md
@@ -244,6 +248,33 @@ See [docs/limitations.md](docs/limitations.md). In short:
 ## Roadmap
 
 See [docs/roadmap.md](docs/roadmap.md) for completed MVP scope and next steps.
+
+## GitHub Repository Metadata
+
+Suggested description:
+
+```txt
+CI/CD cost firewall for cloud and AI spend. Built with ASP.NET Core, EF Core, SQL Server, GitHub webhooks, Terraform/Bicep analysis, and Azure pricing.
+```
+
+Suggested topics:
+
+```txt
+dotnet
+aspnetcore
+ef-core
+sql-server
+azure
+devops
+github-webhooks
+terraform
+bicep
+finops
+cloud-cost
+pricing
+saas
+portfolio-project
+```
 
 ## Portfolio Release Checklist
 

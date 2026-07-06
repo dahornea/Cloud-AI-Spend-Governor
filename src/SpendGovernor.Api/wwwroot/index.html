@@ -4,310 +4,348 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Cloud & AI Spend Governor</title>
-  <link rel="stylesheet" href="/styles.css">
+  <meta name="description" content="Catch risky cloud and AI cost increases before merge/deploy with PR-based cost checks, budget policies, and GitHub reports.">
+  <link rel="stylesheet" href="/landing.css">
 </head>
-<body>
-  <aside class="sidebar">
-    <div class="brand">
+<body class="landing-page">
+  <header class="site-header">
+    <a class="brand-link" href="/" aria-label="Cloud & AI Spend Governor home">
       <span class="brand-mark">SG</span>
-      <div>
-        <strong>Spend Governor</strong>
-        <small>Cloud & AI cost firewall</small>
-      </div>
-    </div>
-    <nav>
-      <button class="nav-button active" data-view="overview">Overview</button>
-      <button class="nav-button" data-view="analyses">Analyses</button>
-      <button class="nav-button" data-view="policies">Policies</button>
-      <button class="nav-button" data-view="approvals">Approvals</button>
-      <button class="nav-button" data-view="audit">Audit</button>
+      <span>Cloud & AI Spend Governor</span>
+    </a>
+    <nav class="site-nav" aria-label="Primary navigation">
+      <a href="#workflow">Workflow</a>
+      <a href="#dashboard-preview">Product</a>
+      <a href="#features">Features</a>
+      <a href="#demo">Demo</a>
     </nav>
-    <div class="login-box">
-      <label for="emailInput">User</label>
-      <input id="emailInput" type="email" autocomplete="email">
-      <label for="displayNameInput">Name</label>
-      <input id="displayNameInput" type="text" autocomplete="name" placeholder="Demo Owner">
-      <label for="passwordInput">Password</label>
-      <input id="passwordInput" type="password" autocomplete="current-password">
-      <button id="switchUserButton">Switch</button>
-      <div class="login-actions">
-        <button id="loginButton" type="button">Login</button>
-        <button id="registerButton" type="button">Register</button>
-        <button id="logoutButton" type="button">Logout</button>
-      </div>
+    <div class="nav-actions">
+      <a class="text-link" href="/dashboard">Log in</a>
+      <a class="button ghost" href="/dashboard">Open App</a>
+      <a class="button primary" href="/dashboard">Try Demo</a>
     </div>
-  </aside>
+  </header>
 
-  <main class="app-shell">
-    <header class="topbar">
-      <div>
-        <h1 id="pageTitle">Overview</h1>
-        <p id="pageSubtitle"></p>
-      </div>
-      <div class="context-controls">
-        <label>
-          Workspace
-          <select id="workspaceSelect"></select>
-        </label>
-        <label>
-          Project
-          <select id="projectSelect"></select>
-        </label>
-      </div>
-    </header>
-
-    <section id="statusBanner" class="status-banner hidden"></section>
-
-    <section id="overviewView" class="view active">
-      <section class="hero-panel" aria-labelledby="heroTitle">
-        <div>
-          <p class="eyebrow">PR-time cost governance</p>
-          <h2 id="heroTitle">Catch cloud and AI cost increases before merge/deploy.</h2>
-          <p>Seed demo scans or run a demo PR to show PASS/WARN/FAIL decisions, resource-level cost drivers, pricing metadata, and developer recommendations.</p>
-        </div>
-        <div class="hero-actions">
-          <button id="heroSeedDemoButton" class="primary" type="button">Seed screenshot demo</button>
-          <button id="heroRunDemoButton" type="button">Run selected demo PR</button>
-        </div>
-      </section>
-
-      <div class="admin-grid">
-        <section class="admin-panel">
-          <h2>Workspace</h2>
-          <div class="inline-form">
-            <label>
-              Name
-              <input id="workspaceNameInput" type="text" placeholder="Platform team">
-            </label>
-            <button id="createWorkspaceButton" type="button">Create Workspace</button>
+  <main>
+    <section class="hero-section" aria-labelledby="hero-title">
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <p class="eyebrow">CI/CD cost firewall</p>
+          <h1 id="hero-title">Catch cloud and AI cost increases before merge.</h1>
+          <p class="hero-lede">Analyze Pull Requests, estimate monthly cloud and LLM spend impact, evaluate budget rules, and report PASS/WARN/FAIL in GitHub and the dashboard.</p>
+          <div class="hero-actions">
+            <a class="button primary large" href="/dashboard">Open demo dashboard</a>
+            <a class="button ghost large" href="#workflow">See how it works</a>
           </div>
-        </section>
-        <section class="admin-panel">
-          <h2>Project</h2>
-          <div class="project-form">
-            <label>
-              Name
-              <input id="projectNameInput" type="text" placeholder="Payments API">
-            </label>
-            <label>
-              Owner
-              <input id="repoOwnerInput" type="text" placeholder="acme">
-            </label>
-            <label>
-              Repository
-              <input id="repoNameInput" type="text" placeholder="payments-api">
-            </label>
-            <button id="createProjectButton" type="button">Create Project</button>
+          <p class="hero-note">Reviewable cost reports. Developer-friendly recommendations. Budget-aware decisions before deploy.</p>
+        </div>
+
+        <div class="hero-preview" aria-label="Product preview showing Pull Request input and cost output">
+          <div class="preview-card pr-card">
+            <div class="card-topline">
+              <span class="muted-label">Pull Request</span>
+              <span class="tag neutral">dev</span>
+            </div>
+            <h2>shop-api #42</h2>
+            <div class="change-list">
+              <span>add Azure Redis Premium P1</span>
+              <span>App Service B1 -> P1v3</span>
+              <span>AI workflow gpt-4.1, 10,000 runs</span>
+            </div>
           </div>
-        </section>
-      </div>
 
-      <div class="metric-grid">
-        <div class="metric-panel">
-          <span>Latest scans</span>
-          <strong id="metricPrs">0</strong>
-        </div>
-        <div class="metric-panel">
-          <span>Monthly cost at risk</span>
-          <strong id="metricDelta">EUR 0.00</strong>
-        </div>
-        <div class="metric-panel">
-          <span>Failed cost checks</span>
-          <strong id="metricRisk">0</strong>
-        </div>
-        <div class="metric-panel">
-          <span>Warnings</span>
-          <strong id="metricWarnings">0</strong>
-        </div>
-        <div class="metric-panel">
-          <span>Repositories monitored</span>
-          <strong id="metricRepo">-</strong>
-        </div>
-        <div class="metric-panel">
-          <span>Average confidence</span>
-          <strong id="metricConfidence">-</strong>
-        </div>
-      </div>
-
-      <h2>Repositories</h2>
-      <div class="table-wrap repository-table">
-        <table>
-          <thead>
-            <tr>
-              <th>Provider</th>
-              <th>Repository</th>
-              <th>Default branch</th>
-              <th>Installation</th>
-              <th>Last scan</th>
-            </tr>
-          </thead>
-          <tbody id="repositoryBody"></tbody>
-        </table>
-      </div>
-
-      <div class="toolbar">
-        <label>
-          Demo PR
-          <select id="scenarioSelect">
-            <option value="scenario-cheap-change">Cheap change</option>
-            <option value="scenario-expensive-cloud-change">Expensive cloud change</option>
-            <option value="scenario-expensive-ai-workflow">Expensive AI workflow</option>
-            <option value="bicep-arm-cheap-change">Bicep ARM cheap change</option>
-            <option value="bicep-arm-expensive-cloud-change">Bicep ARM expensive change</option>
-            <option value="bicep-arm-parameterized-template">Bicep ARM parameterized</option>
-            <option value="small-vm">Small Azure VM</option>
-            <option value="sku-threshold">SKU threshold</option>
-            <option value="unknown-resource">Unknown resource</option>
-            <option value="approval-required">Approval required</option>
-            <option value="no-cloud-impact">No cloud impact</option>
-          </select>
-        </label>
-        <button id="runDemoButton">Run Demo PR</button>
-        <div id="devDemoControls" class="dev-demo-controls hidden">
-          <button id="seedDemoButton" type="button">Seed Demo Data</button>
-          <button id="resetDemoButton" type="button">Reset Demo Data</button>
-        </div>
-        <button id="exportSummaryButton">Export 30-day CSV</button>
-      </div>
-
-      <h2>Latest Analyses</h2>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>PR</th>
-              <th>Repository</th>
-              <th>Environment</th>
-              <th>Status</th>
-              <th>Decision</th>
-              <th>Delta</th>
-              <th>Confidence</th>
-              <th>Created</th>
-              <th>Completed</th>
-            </tr>
-          </thead>
-          <tbody id="latestAnalysesBody"></tbody>
-        </table>
-      </div>
-    </section>
-
-    <section id="analysesView" class="view">
-      <div class="split">
-        <div>
-          <div class="section-heading">
-            <h2>PR Analyses</h2>
-            <button id="refreshAnalysesButton">Refresh</button>
+          <div class="preview-card report-card">
+            <div class="card-topline">
+              <span class="muted-label">Cost report</span>
+              <span class="tag fail">FAIL</span>
+            </div>
+            <div class="impact-row">
+              <span>Estimated monthly impact</span>
+              <strong>+EUR 342/month</strong>
+            </div>
+            <div class="report-grid">
+              <div><span>Confidence</span><strong>Medium</strong></div>
+              <div><span>Policy</span><strong>Dev budget exceeded</strong></div>
+            </div>
+            <p>Use a cheaper Redis/App Service SKU in dev or apply environment-specific configuration.</p>
           </div>
-          <div class="filter-bar" aria-label="Scan history filters">
-            <label>
-              Search
-              <input id="analysisSearchInput" type="search" placeholder="Repository or PR number">
-            </label>
-            <label>
-              Status
-              <select id="statusFilter">
-                <option value="">All statuses</option>
-              </select>
-            </label>
-            <label>
-              Decision
-              <select id="decisionFilter">
-                <option value="">All decisions</option>
-              </select>
-            </label>
-            <label>
-              Environment
-              <select id="environmentFilter">
-                <option value="">All environments</option>
-              </select>
-            </label>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>PR</th>
-                  <th>Repository</th>
-                  <th>Environment</th>
-                  <th>Status</th>
-                  <th>Decision</th>
-                  <th>Delta</th>
-                  <th>Confidence</th>
-                  <th>Created</th>
-                  <th>Completed</th>
-                </tr>
-              </thead>
-              <tbody id="analysesBody"></tbody>
-            </table>
-          </div>
-        </div>
-        <div id="analysisDetail" class="detail-panel"></div>
-      </div>
-    </section>
 
-    <section id="policiesView" class="view">
-      <div class="section-heading">
-        <div>
-          <h2>Budgets & Policies</h2>
-          <p class="section-subtitle">Define simple environment guardrails that future scans use to decide PASS, WARN, or FAIL.</p>
-        </div>
-        <div class="button-row">
-          <button id="saveBudgetsButton" type="button">Save Budgets</button>
-          <button id="savePolicyButton" type="button">Save Policy</button>
-        </div>
-      </div>
-      <div class="table-wrap budget-table">
-        <table>
-          <thead>
-            <tr>
-              <th>Environment</th>
-              <th>Monthly budget</th>
-              <th>PR delta limit</th>
-              <th>Approval above</th>
-              <th>Block</th>
-              <th>Currency</th>
-            </tr>
-          </thead>
-          <tbody id="budgetRows"></tbody>
-        </table>
-      </div>
-      <textarea id="policyEditor" spellcheck="false"></textarea>
-      <div id="policyValidation" class="validation-panel"></div>
-    </section>
-
-    <section id="approvalsView" class="view">
-      <div class="split">
-        <div>
-          <h2>Required Approvals</h2>
-          <div id="approvalRequiredList" class="list-panel"></div>
-        </div>
-        <div>
-          <h2>Granted Approvals</h2>
-          <div id="grantedApprovalsList" class="list-panel"></div>
+          <div class="preview-card notes-card">
+            <div class="card-topline">
+              <span class="muted-label">Assumptions</span>
+              <span class="tag pass">Reviewable</span>
+            </div>
+            <dl>
+              <div><dt>Pricing source</dt><dd>Azure Retail API + local catalog</dd></div>
+              <div><dt>Region</dt><dd>West Europe</dd></div>
+              <div><dt>Monthly hours</dt><dd>730</dd></div>
+            </dl>
+          </div>
         </div>
       </div>
     </section>
 
-    <section id="auditView" class="view">
-      <div class="section-heading">
-        <h2>Audit Events</h2>
-        <button id="refreshAuditButton">Refresh</button>
+    <section class="section compare-section" id="value">
+      <div class="section-header">
+        <p class="eyebrow">Why it matters</p>
+        <h2>Cost visibility before merge, not after the invoice.</h2>
+        <p>Traditional FinOps tooling is useful, but often arrives after spend has already shipped. Spend Governor moves the cost conversation into the Pull Request.</p>
       </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Event</th>
-              <th>Message</th>
-            </tr>
-          </thead>
-          <tbody id="auditBody"></tbody>
-        </table>
+      <div class="comparison-grid">
+        <article class="compare-panel late-panel">
+          <div class="card-topline">
+            <span class="muted-label">Traditional FinOps</span>
+            <span class="tag warn">After spend</span>
+          </div>
+          <h3>Find the increase after deployment.</h3>
+          <div class="mini-timeline muted-flow">
+            <span>Merge</span>
+            <span>Deploy</span>
+            <span>Invoice</span>
+            <strong>Explain variance</strong>
+          </div>
+          <ul class="compact-list">
+            <li>Costs appear after resources are already running.</li>
+            <li>Developers need context from a different system.</li>
+            <li>Fixes become follow-up work instead of PR review.</li>
+          </ul>
+        </article>
+
+        <article class="compare-panel early-panel">
+          <div class="card-topline">
+            <span class="muted-label">Cloud & AI Spend Governor</span>
+            <span class="tag pass">Before merge</span>
+          </div>
+          <h3>Review cost impact while it is still fixable.</h3>
+          <div class="mini-timeline active-flow">
+            <span>Open PR</span>
+            <span>Analyze</span>
+            <span>Policy check</span>
+            <strong>Fix before merge</strong>
+          </div>
+          <ul class="compact-list">
+            <li>Estimate monthly cloud and AI spend from changed files.</li>
+            <li>Apply dev, staging, and production budget rules.</li>
+            <li>Return PASS/WARN/FAIL with a concrete recommendation.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section workflow-section" id="workflow">
+      <div class="workflow-layout">
+        <div class="section-header compact">
+          <p class="eyebrow">Workflow</p>
+          <h2>Built for the Pull Request loop.</h2>
+          <p>Four steps, one review surface, no cloud credentials required for the local demo.</p>
+        </div>
+        <div class="workflow-preview">
+          <div class="pipeline-card">
+            <span class="muted-label">Pipeline preview</span>
+            <div class="pipeline-row">
+              <span>PR #42</span>
+              <strong>shop-api</strong>
+            </div>
+            <div class="pipeline-row">
+              <span>IaC + AI config</span>
+              <strong>Terraform / ARM / gpt-4.1</strong>
+            </div>
+            <div class="pipeline-row">
+              <span>Policy</span>
+              <strong>dev delta limit</strong>
+            </div>
+            <div class="pipeline-result">
+              <span class="tag fail">FAIL</span>
+              <strong>+EUR 342/month</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="timeline">
+        <article>
+          <span>01</span>
+          <h3>Open a Pull Request</h3>
+          <p>Use a real PR or a seeded demo scenario.</p>
+        </article>
+        <article>
+          <span>02</span>
+          <h3>Analyze changed files</h3>
+          <p>Terraform, Bicep/ARM, and AI workflow config.</p>
+        </article>
+        <article>
+          <span>03</span>
+          <h3>Estimate monthly impact</h3>
+          <p>Attach pricing metadata and confidence.</p>
+        </article>
+        <article>
+          <span>04</span>
+          <h3>Review PASS/WARN/FAIL</h3>
+          <p>See the decision in GitHub and the dashboard.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section product-showcase" id="dashboard-preview">
+      <div class="showcase-grid">
+        <div class="showcase-copy">
+          <p class="eyebrow">Dashboard preview</p>
+          <h2>See risk and cost impact in one dashboard.</h2>
+          <p>Scan history is built for quick triage: repository, PR, environment, status, decision, monthly delta, confidence, and timestamps.</p>
+          <ul class="check-list">
+            <li>Filter by decision, status, or environment.</li>
+            <li>Spot failed checks and monthly cost at risk.</li>
+            <li>Open the exact scan behind a PR decision.</li>
+          </ul>
+        </div>
+        <div class="dashboard-mock product-mock" aria-label="Dashboard scan history preview">
+          <div class="mock-toolbar">
+            <span>Latest analyses</span>
+            <strong>3 scans</strong>
+          </div>
+          <div class="mock-metrics">
+            <div><span>Cost at risk</span><strong>+EUR 1,025</strong></div>
+            <div><span>Failed checks</span><strong>2</strong></div>
+            <div><span>Avg confidence</span><strong>Medium</strong></div>
+          </div>
+          <div class="mock-table">
+            <div class="mock-row head"><span>PR</span><span>Env</span><span>Decision</span><span>Delta</span><span>Confidence</span></div>
+            <div class="mock-row"><span>#42 shop-api</span><span>dev</span><span class="tag fail">FAIL</span><strong>+EUR 342</strong><span>Medium</span></div>
+            <div class="mock-row"><span>#39 billing-worker</span><span>prod</span><span class="tag warn">WARN</span><strong>+EUR 96</strong><span>High</span></div>
+            <div class="mock-row"><span>#35 portal</span><span>dev</span><span class="tag pass">PASS</span><strong>+EUR 12</strong><span>High</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section product-showcase alternate" id="scan-detail">
+      <div class="showcase-grid">
+        <div class="scan-mock product-mock" aria-label="Scan detail cost breakdown preview">
+          <div class="recommendation-strip">
+            <span class="tag fail">FAIL</span>
+            <div>
+              <strong>Use a cheaper dev SKU</strong>
+              <p>Redis Premium P1 and App Service P1v3 exceed the dev delta limit.</p>
+            </div>
+          </div>
+          <div class="breakdown-list">
+            <div><span>Azure Redis Premium P1</span><strong>+EUR 310/month</strong></div>
+            <div><span>App Service B1 -> P1v3</span><strong>+EUR 218/month</strong></div>
+            <div><span>AI summarization workflow</span><strong>+EUR 114/month</strong></div>
+          </div>
+          <div class="metadata-grid-small">
+            <div><span>Pricing source</span><strong>Azure Retail API</strong></div>
+            <div><span>Region</span><strong>West Europe</strong></div>
+            <div><span>Monthly hours</span><strong>730</strong></div>
+            <div><span>Assumptions</span><strong>Desired state only</strong></div>
+          </div>
+        </div>
+        <div class="showcase-copy">
+          <p class="eyebrow">Scan detail preview</p>
+          <h2>Inspect the exact cost drivers behind a decision.</h2>
+          <p>The report does not stop at FAIL. It shows the resources, pricing source, assumptions, confidence level, and recommendation behind the policy result.</p>
+          <ul class="check-list">
+            <li>Cost breakdown by resource and workflow.</li>
+            <li>Detected resources and ARM/Bicep metadata.</li>
+            <li>Pricing metadata, assumptions, and policy evaluations.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="section pr-report-section" id="demo">
+      <div class="section-header centered">
+        <p class="eyebrow">GitHub PR report</p>
+        <h2>Bring cost review directly into the Pull Request.</h2>
+        <p>Simulated mode is enough for a local portfolio demo. Real GitHub reporting can publish the same report shape when configured.</p>
+      </div>
+      <div class="github-report-mock product-mock">
+        <div class="mock-toolbar">
+          <span>cloud-ai-spend-governor-report</span>
+          <span class="tag fail">FAIL</span>
+        </div>
+        <div class="pr-summary-grid">
+          <div><span>Estimated monthly impact</span><strong>+EUR 342/month</strong></div>
+          <div><span>Policy result</span><strong>Dev budget exceeded</strong></div>
+          <div><span>Confidence</span><strong>Medium</strong></div>
+        </div>
+        <div class="markdown-table">
+          <div class="mock-row head"><span>Resource</span><span>SKU</span><span>Region</span><span>Monthly</span></div>
+          <div class="mock-row"><span>redis-prod</span><span>Premium P1</span><span>West Europe</span><strong>+EUR 310</strong></div>
+          <div class="mock-row"><span>api-plan</span><span>P1v3</span><span>West Europe</span><strong>+EUR 218</strong></div>
+          <div class="mock-row"><span>summarize-pr</span><span>gpt-4.1</span><span>tokens</span><strong>+EUR 114</strong></div>
+        </div>
+        <div class="report-note">
+          <strong>Recommendation</strong>
+          <p>Use a cheaper Redis/App Service SKU in dev or reduce AI workflow token usage before merge.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section features-section" id="features">
+      <div class="section-header compact">
+        <p class="eyebrow">Feature highlights</p>
+        <h2>Focused on the review flow that matters.</h2>
+      </div>
+      <div class="feature-grid compact-features">
+        <article><span>01</span><h3>Pull Request cost checks</h3><p>Estimate spend before merge.</p></article>
+        <article><span>02</span><h3>Terraform + Bicep/ARM</h3><p>Prefer structured IaC artifacts.</p></article>
+        <article><span>03</span><h3>AI workflow spend</h3><p>Model token and run volume cost.</p></article>
+        <article><span>04</span><h3>Budget decisions</h3><p>PASS, WARN, or FAIL by environment.</p></article>
+        <article><span>05</span><h3>SQL scan history</h3><p>Persist scans and child details.</p></article>
+        <article><span>06</span><h3>Pricing confidence</h3><p>Show source, fallback, and assumptions.</p></article>
+      </div>
+    </section>
+
+    <section class="section demo-proof-section">
+      <div class="section-header compact">
+        <p class="eyebrow">Demo proof points</p>
+        <h2>What you can show in three minutes.</h2>
+      </div>
+      <div class="proof-grid">
+        <article>
+          <span class="tag pass">PASS</span>
+          <h3>Cheap cloud change</h3>
+          <p>Small storage and App Service change with high confidence and no blocking action.</p>
+        </article>
+        <article>
+          <span class="tag fail">FAIL</span>
+          <h3>Expensive cloud change</h3>
+          <p>Redis Premium, App Service upgrade, and Log Analytics ingestion exceed the dev policy.</p>
+        </article>
+        <article>
+          <span class="tag neutral">AI estimate</span>
+          <h3>Expensive AI workflow</h3>
+          <p>gpt-4.1 workflow cost from model, input tokens, output tokens, and monthly runs.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="final-cta">
+      <p class="eyebrow">Ready for the walkthrough</p>
+      <h2>Explore the demo and inspect the full review flow.</h2>
+      <p>Seed local scan data, open the dashboard, and review PASS, FAIL, cost breakdowns, pricing metadata, assumptions, and GitHub report previews.</p>
+      <div class="hero-actions center">
+        <a class="button primary large" href="/dashboard">Open Demo</a>
+        <a class="button ghost large" href="/dashboard">View Dashboard</a>
+        <a class="button ghost large" href="#workflow">Read Workflow</a>
       </div>
     </section>
   </main>
 
-  <script src="/app.js"></script>
+  <footer class="site-footer">
+    <div>
+      <a class="brand-link" href="/">
+        <span class="brand-mark">SG</span>
+        <span>Cloud & AI Spend Governor</span>
+      </a>
+      <p>Portfolio project focused on pre-deploy cloud and AI cost governance.</p>
+    </div>
+    <nav aria-label="Footer navigation">
+      <a href="#workflow">Docs</a>
+      <a href="#demo">Demo</a>
+      <a href="/dashboard">Login</a>
+      <a href="/dashboard">Dashboard</a>
+    </nav>
+  </footer>
 </body>
 </html>

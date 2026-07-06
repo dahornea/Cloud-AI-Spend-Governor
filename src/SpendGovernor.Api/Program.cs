@@ -96,6 +96,12 @@ app.Use(async (context, next) =>
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.MapHealthChecks("/health");
+app.MapGet("/dashboard", (IWebHostEnvironment environment) =>
+    Results.Content(File.ReadAllText(Path.Combine(environment.WebRootPath, "dashboard.html")), "text/html", Encoding.UTF8)).WithOrder(-10);
+app.MapGet("/app", (IWebHostEnvironment environment) =>
+    Results.Content(File.ReadAllText(Path.Combine(environment.WebRootPath, "dashboard.html")), "text/html", Encoding.UTF8)).WithOrder(-10);
+app.MapGet("/workspaces", (IWebHostEnvironment environment) =>
+    Results.Content(File.ReadAllText(Path.Combine(environment.WebRootPath, "dashboard.html")), "text/html", Encoding.UTF8)).WithOrder(-10);
 
 app.MapPost("/api/auth/register", (AuthRegisterRequest request, HttpContext context, SpendGovernorStore store) =>
 {

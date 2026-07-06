@@ -1,14 +1,19 @@
-# Demo Assets
+# Screenshot Assets
 
-This folder is reserved for real portfolio screenshots and short demo clips.
+This folder is reserved for real portfolio screenshots captured from the local demo. Do not add fabricated screenshots.
 
-Suggested captures:
+Expected future screenshot filenames:
 
-- `dashboard-latest-scans.png`: seeded scans visible in the dashboard.
-- `scan-cheap-pass.png`: cheap cloud change detail with PASS decision.
-- `scan-expensive-cloud-fail.png`: expensive cloud change detail with FAIL decision and cost breakdown.
-- `scan-ai-workflow.png`: AI token workflow estimate and assumptions.
-- `github-pr-report.png`: simulated or real GitHub PR report markdown.
-- `health-check.png`: `/health` returning healthy after migrations.
+- `landing-page.png`
+- `dashboard-overview.png`
+- `scan-history.png`
+- `scan-detail-expensive-cloud.png`
+- `scan-detail-ai-workflow.png`
+- `pricing-metadata.png`
+- `github-pr-report-preview.png`
+- `environment-budgets.png`
+- `architecture-diagram.png`
 
-Keep screenshots free of real tokens, private repository names, personal emails, or production connection strings.
+Use [../screenshots.md](../screenshots.md) as the capture checklist.
+
+Keep screenshots free of real tokens, webhook secrets, private keys, personal access tokens, personal emails, private repository names, and production connection strings.
