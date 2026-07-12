@@ -1,0 +1,32 @@
+version: 1
+environment: production
+currency: EUR
+defaultRegion: westeurope
+hoursPerMonth: 730
+
+budgets:
+  production:
+    maxMonthlyDelta: 1000
+    maxMonthlyCost: 8000
+    action: block
+
+policies:
+  - id: require-high-confidence-for-production
+    title: "Require high-confidence production estimates"
+    severity: warn
+    environments:
+      - production
+    condition:
+      confidenceBelow: High
+    message: "Production changes should have high-confidence cost estimates."
+    recommendation: "Use Terraform Plan JSON or compiled ARM JSON for better estimate confidence."
+
+  - id: block-large-production-delta
+    title: "Block large production cost deltas"
+    severity: fail
+    environments:
+      - production
+    condition:
+      estimatedMonthlyDeltaGreaterThan: 1000
+    message: "This production change exceeds the monthly delta guardrail."
+    recommendation: "Reduce capacity or split the rollout before merge."

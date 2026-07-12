@@ -40,7 +40,7 @@ jobs:
         run: dotnet run --configuration Release --no-build --project tests/SpendGovernor.Tests/SpendGovernor.Tests.csproj
 
       - name: Run spendgov CLI smoke scan
-        run: dotnet run --configuration Release --no-build --project src/SpendGovernor.Cli/SpendGovernor.Cli.csproj -- scan --path demo/scenario-expensive-cloud-change --markdown artifacts/spendgov-report.md --json artifacts/spendgov-report.json --fail-on never --repository acme/shop-api --pr-number 42 --head-branch feature/dev-premium-redis --commit-sha ci-smoke
+        run: dotnet run --configuration Release --no-build --project src/SpendGovernor.Cli/SpendGovernor.Cli.csproj -- scan --path demo/scenario-expensive-cloud-change --markdown artifacts/spendgov-report.md --json artifacts/spendgov-report.json --output-sarif artifacts/spendgov.sarif --github-annotations --fail-on never --repository acme/shop-api --pr-number 42 --head-branch feature/dev-premium-redis --commit-sha ci-smoke
 
       - name: Upload spendgov CLI reports
         uses: actions/upload-artifact@v4
@@ -50,6 +50,7 @@ jobs:
           path: |
             artifacts/spendgov-report.md
             artifacts/spendgov-report.json
+            artifacts/spendgov.sarif
 
       - name: Publish API artifact
         run: dotnet publish src/SpendGovernor.Api/SpendGovernor.Api.csproj --configuration Release --no-build --output artifacts/spend-governor-api

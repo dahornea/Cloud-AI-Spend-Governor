@@ -71,8 +71,10 @@ See [docs/architecture.md](docs/architecture.md) for the detailed system archite
 - Persisted scan lifecycle: Queued, Running, Completed, Failed.
 - Cost breakdown rows, detected resources, assumptions, and policy evaluations per scan.
 - PASS/WARN/FAIL policy decisions from `.spendgov.yml` and project budgets.
+- Policy-as-Code guardrails for cloud resources and AI workflows in `.spendgov.yml`.
 - GitHub PR report rendering with idempotent simulated/real publishing.
-- CLI Markdown/JSON reports with CI exit codes for policy failures.
+- CLI Markdown/JSON/SARIF reports with CI exit codes for policy failures.
+- GitHub Actions annotations for source-aware cloud and AI spend findings.
 - CSV exports for resources, policy findings, recommendations, and project summaries.
 - Health endpoint at `GET /health`.
 
@@ -148,12 +150,28 @@ Detailed setup: [docs/local-development.md](docs/local-development.md).
 Run the same cost checks without starting the web app:
 
 ```powershell
-dotnet run --project src\SpendGovernor.Cli\SpendGovernor.Cli.csproj -- scan --path demo\scenario-expensive-cloud-change --markdown artifacts\spendgov-report.md --json artifacts\spendgov-report.json --fail-on never
+dotnet run --project src\SpendGovernor.Cli\SpendGovernor.Cli.csproj -- scan --path demo\scenario-expensive-cloud-change --markdown artifacts\spendgov-report.md --json artifacts\spendgov-report.json --output-sarif artifacts\spendgov.sarif --github-annotations --fail-on never
 ```
 
-The CLI reads `.spendgov.yml`, detects Terraform Plan JSON, Bicep/ARM JSON, raw Terraform/Bicep, and AI workflow files, then writes Markdown and JSON reports.
+The CLI reads `.spendgov.yml`, detects Terraform Plan JSON, Bicep/ARM JSON, raw Terraform/Bicep, and AI workflow files, then writes Markdown, JSON, and optional SARIF reports.
 
 The local composite Action lives at `.github/actions/spendgov/action.yml`. See [docs/cli.md](docs/cli.md).
+
+## Policy-as-Code
+
+Teams can define custom spend guardrails in `.spendgov.yml` under `policies:`. Policies match detected Azure resources or AI workflows, apply simple conditions such as cost thresholds, confidence, pricing fallback, or missing SKU/region data, and can raise INFO, WARN, or FAIL outcomes.
+
+The same Policy-as-Code rules run in dashboard scans, GitHub webhook scans, CLI scans, and the local GitHub Action. Reports include a dedicated Policy-as-Code section, and FAIL/WARN policies affect CI exit codes through `--fail-on`.
+
+See [docs/policy-as-code.md](docs/policy-as-code.md).
+
+## SARIF and GitHub Actions Annotations
+
+Spend Governor can emit CI-native findings for budget failures, Policy-as-Code matches, high monthly impact resources, low-confidence estimates, pricing fallback, and unknown pricing. The CLI can write SARIF 2.1.0 with `--output-sarif` and emit GitHub Actions annotations with `--github-annotations`.
+
+The local Actions wrapper exposes the same options and the demo workflow uploads Markdown, JSON, and SARIF artifacts. SARIF upload to GitHub Code Scanning is optional and disabled by default.
+
+See [docs/sarif-and-annotations.md](docs/sarif-and-annotations.md) and [docs/github-action.md](docs/github-action.md).
 
 ## Docker Setup
 
@@ -237,6 +255,9 @@ demo/
 docs/
   architecture.md
   cli.md
+  policy-as-code.md
+  sarif-and-annotations.md
+  github-action.md
   demo-walkthrough.md
   sample-pr-report.md
   cv-bullets.md

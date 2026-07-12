@@ -32,8 +32,23 @@ var tests = new List<(string Name, Action Test)>
     ("Azure Retail hybrid falls back to local catalog", ScenarioAzureRetailHybridFallback),
     ("Azure Retail metadata appears in reports and dashboard", () => ScenarioAzureRetailMetadataReportAndDashboard().GetAwaiter().GetResult()),
     ("Azure Retail region normalization and candidate mapping", ScenarioAzureRetailRegionAndMapping),
+    ("Policy-as-Code config parses valid policies", ScenarioPolicyAsCodeConfigParsing),
+    ("Policy-as-Code validation catches duplicate id and invalid severity", ScenarioPolicyAsCodeValidation),
+    ("Policy-as-Code matches premium Azure SKU and fails decision", ScenarioPolicyAsCodePremiumSkuFail),
+    ("Policy-as-Code matches AI model and monthly cost", ScenarioPolicyAsCodeAiWorkflowFail),
+    ("Policy-as-Code matches condition flags", ScenarioPolicyAsCodeConditionMatching),
+    ("Policy-as-Code warn policy changes final decision to WARN", ScenarioPolicyAsCodeWarnDecision),
+    ("Policy-as-Code non-matching fail policy does not affect decision", ScenarioPolicyAsCodeNonMatchPasses),
+    ("Policy-as-Code persists for dashboard details", () => ScenarioPolicyAsCodePersistence().GetAwaiter().GetResult()),
+    ("CI findings are generated from budget and policy failures", ScenarioCiFindingGenerationBudgetAndPolicy),
+    ("CI findings are generated from confidence and pricing fallback", ScenarioCiFindingGenerationConfidenceAndPricing),
+    ("SARIF writer emits valid result shape", ScenarioSarifWriter),
+    ("GitHub annotation writer escapes and filters findings", ScenarioGitHubAnnotationWriter),
     ("CLI emits Markdown and JSON reports", () => ScenarioCliEmitsMarkdownAndJson().GetAwaiter().GetResult()),
+    ("CLI writes SARIF and annotations when enabled", () => ScenarioCliSarifAndAnnotations().GetAwaiter().GetResult()),
     ("CLI returns non-zero when policy fails", () => ScenarioCliPolicyExitCode().GetAwaiter().GetResult()),
+    ("CLI invalid Policy-as-Code config exits 2", () => ScenarioCliInvalidPolicyConfigExitCode().GetAwaiter().GetResult()),
+    ("GitHub Action wires SARIF and annotation inputs", ScenarioGitHubActionSarifInputs),
     ("Terraform plan JSON files are detected", ScenarioTerraformPlanJsonDetection),
     ("Terraform plan JSON parser maps resource actions", ScenarioTerraformPlanJsonActionMapping),
     ("Terraform plan JSON parser extracts Azure pricing fields", ScenarioTerraformPlanJsonAzureExtraction),
@@ -139,6 +154,31 @@ static AnalysisRequest Request(
         Settings = settings ?? Settings(),
         DashboardBaseUrl = "http://localhost:5102"
     };
+}
+
+static string PolicyAsCodeDevStrictYaml()
+{
+    return """
+        version: 1
+        currency: EUR
+        defaultRegion: westeurope
+        environment: dev
+
+        policies:
+          - id: dev-no-premium-skus
+            title: Block premium development SKUs
+            severity: fail
+            environments:
+              - dev
+            match:
+              provider: azure
+              skuContainsAny:
+                - Premium
+                - P1v3
+                - P2v3
+            message: "Premium cloud SKUs are not allowed in dev."
+            recommendation: "Use B1, Basic, or another development-sized SKU."
+        """;
 }
 
 static void ScenarioNoCloudImpact()
@@ -803,6 +843,481 @@ static void ScenarioAzureRetailRegionAndMapping()
     Assert(candidates.Any(candidate => candidate.Filter.Contains("P1", StringComparison.Ordinal)), "Expected Redis P1 SKU/meter candidate.");
 }
 
+static void ScenarioPolicyAsCodeConfigParsing()
+{
+    var parsed = SpendGovConfigParser.Parse(PolicyAsCodeDevStrictYaml(), Settings(PolicyAsCodeDevStrictYaml()));
+    Assert(parsed.Errors.Count == 0, "Expected valid Policy-as-Code config.");
+    Assert(parsed.Config.Policies.Count == 1, "Expected one custom policy.");
+    var policy = parsed.Config.Policies.Single();
+    Assert(policy.Id == "dev-no-premium-skus", "Expected policy id.");
+    Assert(policy.Severity == SpendPolicySeverity.Fail, "Expected fail severity.");
+    Assert(policy.Environments.Single() == "dev", "Expected dev environment list.");
+    Assert(policy.Match.SkuContainsAny.Contains("Premium"), "Expected skuContainsAny list.");
+}
+
+static void ScenarioPolicyAsCodeValidation()
+{
+    const string yaml =
+        """
+        version: 1
+        policies:
+          - id: duplicate
+            severity: fail
+            match:
+              unknownField: nope
+            message: "first"
+          - id: duplicate
+            severity: nope
+            condition:
+              confidenceBelow: Impossible
+            message:
+        """;
+
+    var parsed = SpendGovConfigParser.Parse(yaml, Settings(yaml));
+    Assert(parsed.Errors.Any(error => error.Contains("Duplicate policy id", StringComparison.OrdinalIgnoreCase)), "Expected duplicate policy id error.");
+    Assert(parsed.Errors.Any(error => error.Contains("invalid severity", StringComparison.OrdinalIgnoreCase)), "Expected invalid severity error.");
+    Assert(parsed.Errors.Any(error => error.Contains("Unsupported policy match field", StringComparison.OrdinalIgnoreCase)), "Expected unknown match field error.");
+    Assert(parsed.Errors.Any(error => error.Contains("Invalid confidence", StringComparison.OrdinalIgnoreCase)), "Expected invalid confidence error.");
+    Assert(parsed.Errors.Any(error => error.Contains("non-empty message", StringComparison.OrdinalIgnoreCase)), "Expected empty message error.");
+}
+
+static void ScenarioPolicyAsCodePremiumSkuFail()
+{
+    const string proposed =
+        """
+        resource "azurerm_service_plan" "api" {
+          name     = "api-plan-dev"
+          location = "westeurope"
+          os_type  = "Linux"
+          sku_name = "P1v3"
+          tags = {
+            environment = "dev"
+          }
+        }
+        """;
+
+    var result = CreateEngine().Analyze(Request([".spendgov.yml", "main.tf"], [], [
+        new RepositoryFile(".spendgov.yml", PolicyAsCodeDevStrictYaml()),
+        new RepositoryFile("main.tf", proposed)
+    ], Settings(PolicyAsCodeDevStrictYaml()), pr: 41));
+
+    Assert(result.PolicyAsCodeEvaluations.Any(evaluation => evaluation.PolicyId == "dev-no-premium-skus" && evaluation.Matched && evaluation.Result == SpendPolicyEvaluationStatus.Fail), "Expected custom policy match.");
+    Assert(result.Analysis.PolicyStatus == PolicyAction.Block, $"Expected fail decision from custom policy, got {result.Analysis.PolicyStatus}.");
+    Assert(result.CommentMarkdown.Contains("Policy-as-Code", StringComparison.Ordinal), "Expected PR report policy-as-code section.");
+}
+
+static void ScenarioPolicyAsCodeAiWorkflowFail()
+{
+    const string yaml =
+        """
+        version: 1
+        ai:
+          enabled: true
+          monthlyBudget: 1000
+          maxCostPerWorkflowMonthly: 900
+          action: warn
+        policies:
+          - id: ai-expensive-model-high-volume
+            severity: fail
+            match:
+              type: aiWorkflow
+              modelIn:
+                - gpt-4.1
+                - gpt-4o
+            condition:
+              estimatedMonthlyCostGreaterThan: 250
+            message: "High-volume workflow uses an expensive model."
+            recommendation: "Use a smaller model or reduce token usage."
+        """;
+    const string workflow =
+        """
+        aiWorkflows:
+          - id: sales-agent
+            provider: azure-openai
+            model: gpt-4.1
+            estimatedMonthlyRequests: 10000
+            averageInputTokens: 8000
+            averageOutputTokens: 2000
+            environment: production
+        """;
+
+    var result = CreateEngine().Analyze(Request([".spendgov.yml", "ai-spend.yml"], [], [
+        new RepositoryFile(".spendgov.yml", yaml),
+        new RepositoryFile("ai-spend.yml", workflow)
+    ], Settings(yaml), pr: 42));
+
+    Assert(result.PolicyAsCodeEvaluations.Any(evaluation => evaluation.PolicyId == "ai-expensive-model-high-volume" && evaluation.Matched), "Expected AI policy match.");
+    Assert(result.Analysis.PolicyStatus == PolicyAction.Block, "Expected AI policy to fail decision.");
+}
+
+static void ScenarioPolicyAsCodeConditionMatching()
+{
+    const string yaml =
+        """
+        version: 1
+        policies:
+          - id: redis-premium-dev
+            severity: fail
+            environments: [dev]
+            match:
+              provider: Azure
+              resourceType: azurerm_redis_cache
+              skuContains: Premium
+              region: westeurope
+            message: "Premium Redis is blocked in dev."
+          - id: fallback-pricing
+            severity: warn
+            condition:
+              pricingFallbackUsed: true
+            message: "Pricing fallback was used."
+          - id: budget-exceeded
+            severity: warn
+            condition:
+              budgetExceeded: true
+            message: "Budget was exceeded."
+          - id: raw-parser-fallback
+            severity: warn
+            condition:
+              analysisSourceIsFallback: true
+            message: "A fallback analyzer was used."
+        """;
+    var parsed = SpendGovConfigParser.Parse(yaml, Settings(yaml));
+    var result = new AnalysisResult
+    {
+        Analysis = new PullRequestAnalysis
+        {
+            Id = Guid.NewGuid(),
+            Environment = "dev",
+            MonthlyDelta = 310,
+            ProposedMonthlyCost = 310,
+            BudgetLimitMonthly = 100,
+            OverallConfidence = ConfidenceLevel.Low
+        },
+        ProposedResources =
+        [
+            new ResourceEstimate
+            {
+                SourceType = ResourceSourceType.Terraform,
+                Provider = "azure",
+                ResourceType = "azurerm_redis_cache",
+                ResourceName = "redis-dev",
+                Region = "westeurope",
+                Sku = "Premium_P_1",
+                Environment = "dev",
+                MonthlyCost = 310,
+                MonthlyDelta = 310,
+                Confidence = ConfidenceLevel.Low,
+                PricingFallbackUsed = true
+            }
+        ]
+    };
+    var findings = new[]
+    {
+        new PolicyFinding
+        {
+            RuleId = "environment-budget-dev",
+            Action = PolicyAction.Warn,
+            Message = "Budget exceeded."
+        }
+    };
+
+    var evaluations = new SpendPolicyEvaluator().Evaluate(result, parsed.Config, findings);
+
+    Assert(parsed.Errors.Count == 0, "Expected condition policy config to parse.");
+    Assert(evaluations.Single(evaluation => evaluation.PolicyId == "redis-premium-dev").Matched, "Expected provider/resourceType/SKU match.");
+    Assert(evaluations.Single(evaluation => evaluation.PolicyId == "fallback-pricing").Matched, "Expected pricing fallback condition match.");
+    Assert(evaluations.Single(evaluation => evaluation.PolicyId == "budget-exceeded").Matched, "Expected budgetExceeded condition match.");
+    Assert(evaluations.Single(evaluation => evaluation.PolicyId == "raw-parser-fallback").Matched, "Expected fallback analyzer condition match.");
+}
+
+static void ScenarioPolicyAsCodeWarnDecision()
+{
+    const string yaml =
+        """
+        version: 1
+        policies:
+          - id: warn-medium-confidence
+            severity: warn
+            condition:
+              confidenceBelow: High
+            message: "This scan should use higher-confidence input."
+            recommendation: "Use Terraform Plan JSON or compiled ARM JSON."
+        """;
+    const string proposed =
+        """
+        resource "azurerm_service_plan" "api" {
+          name     = "api-plan-dev"
+          os_type  = "Linux"
+          sku_name = "B1"
+        }
+        """;
+
+    var result = CreateEngine().Analyze(Request([".spendgov.yml", "main.tf"], [], [
+        new RepositoryFile(".spendgov.yml", yaml),
+        new RepositoryFile("main.tf", proposed)
+    ], Settings(yaml), pr: 45));
+
+    var evaluation = result.PolicyAsCodeEvaluations.Single(evaluation => evaluation.PolicyId == "warn-medium-confidence");
+    Assert(evaluation.Matched && evaluation.Result == SpendPolicyEvaluationStatus.Warn, "Expected confidence policy to warn.");
+    Assert(result.Analysis.PolicyStatus == PolicyAction.Warn, $"Expected WARN decision, got {result.Analysis.PolicyStatus}.");
+    Assert(result.CheckConclusion == "neutral", "Expected GitHub Action/check conclusion to be neutral for warn.");
+}
+
+static void ScenarioPolicyAsCodeNonMatchPasses()
+{
+    const string yaml =
+        """
+        version: 1
+        policies:
+          - id: prod-only-premium-ban
+            severity: fail
+            environments:
+              - production
+            match:
+              skuContains: P1v3
+            message: "Premium SKUs are blocked in production."
+        """;
+    const string proposed =
+        """
+        resource "azurerm_service_plan" "api" {
+          name     = "api-plan-dev"
+          location = "westeurope"
+          os_type  = "Linux"
+          sku_name = "B1"
+          tags = {
+            environment = "dev"
+          }
+        }
+        """;
+
+    var result = CreateEngine().Analyze(Request([".spendgov.yml", "main.tf"], [], [
+        new RepositoryFile(".spendgov.yml", yaml),
+        new RepositoryFile("main.tf", proposed)
+    ], Settings(yaml), pr: 43));
+
+    Assert(result.PolicyAsCodeEvaluations.Single().Matched == false, "Expected policy not to match.");
+    Assert(result.Analysis.PolicyStatus == PolicyAction.Pass, $"Expected PASS, got {result.Analysis.PolicyStatus}.");
+}
+
+static async Task ScenarioPolicyAsCodePersistence()
+{
+    const string proposed =
+        """
+        resource "azurerm_service_plan" "api" {
+          name     = "api-plan-dev"
+          location = "westeurope"
+          os_type  = "Linux"
+          sku_name = "P1v3"
+          tags = {
+            environment = "dev"
+          }
+        }
+        """;
+    await using var fixture = await SqliteFixture.CreateAsync();
+    var request = Request([".spendgov.yml", "main.tf"], [], [
+        new RepositoryFile(".spendgov.yml", PolicyAsCodeDevStrictYaml()),
+        new RepositoryFile("main.tf", proposed)
+    ], Settings(PolicyAsCodeDevStrictYaml()), pr: 44);
+    var repository = await fixture.RepositoryStore.FindOrCreateAsync("github", "acme", "payments-api", "main", null, "123");
+    var scan = await fixture.ScanStore.CreateScanAsync(repository, request);
+    var result = CreateEngine().Analyze(request);
+    await fixture.ScanStore.MarkCompletedAsync(scan.Id, result, "123");
+
+    var loaded = await fixture.ScanStore.GetScanDetailsAsync(scan.Id);
+    var detail = AnalysisDetailResponse.FromScan(loaded!);
+    Assert(detail.PolicyEvaluations.Any(evaluation => evaluation.IsPolicyAsCode && evaluation.PolicyId == "dev-no-premium-skus" && evaluation.Matched), "Expected dashboard policy-as-code evaluation.");
+    Assert(detail.CommentMarkdown.Contains("Policy-as-Code", StringComparison.Ordinal), "Expected persisted PR preview policy section.");
+}
+
+static void ScenarioCiFindingGenerationBudgetAndPolicy()
+{
+    const string budgetPolicy =
+        """
+        version: 1
+        rules:
+          - id: tiny-delta-budget
+            description: Block small test budget
+            type: monthly_delta
+            threshold: 10
+            action: block
+        """;
+    const string budgetResource =
+        """
+        resource "azurerm_linux_virtual_machine" "worker" {
+          name     = "worker-dev"
+          location = "westeurope"
+          size     = "Standard_D4s_v5"
+        }
+        """;
+    var budgetResult = CreateEngine().Analyze(Request([".spendgov.yml", "main.tf"], [], [
+        new RepositoryFile(".spendgov.yml", budgetPolicy),
+        new RepositoryFile("main.tf", budgetResource)
+    ], Settings(budgetPolicy), pr: 46));
+
+    Assert(budgetResult.Findings.Any(finding => finding.RuleId == "spendgov.budget.maxMonthlyDelta" && finding.Severity == SpendFindingSeverity.Error), "Expected budget failure finding.");
+
+    const string policyResource =
+        """
+        resource "azurerm_service_plan" "api" {
+          name     = "api-plan-dev"
+          location = "westeurope"
+          os_type  = "Linux"
+          sku_name = "P1v3"
+          tags = {
+            environment = "dev"
+          }
+        }
+        """;
+    var policyResult = CreateEngine().Analyze(Request([".spendgov.yml", "main.tf"], [], [
+        new RepositoryFile(".spendgov.yml", PolicyAsCodeDevStrictYaml()),
+        new RepositoryFile("main.tf", policyResource)
+    ], Settings(PolicyAsCodeDevStrictYaml()), pr: 47));
+
+    var policyFinding = policyResult.Findings.Single(finding => finding.RuleId == "spendgov.policy.dev-no-premium-skus");
+    Assert(policyFinding.Severity == SpendFindingSeverity.Error, "Expected fail policy to become an error finding.");
+    Assert(policyFinding.SourceFile == "main.tf" && policyFinding.StartLine == 1, "Expected best-effort source location.");
+    Assert(policyResult.CommentMarkdown.Contains("## CI Findings", StringComparison.Ordinal), "Expected Markdown report CI findings section.");
+}
+
+static void ScenarioCiFindingGenerationConfidenceAndPricing()
+{
+    var result = new AnalysisResult
+    {
+        Analysis = new PullRequestAnalysis
+        {
+            Id = Guid.NewGuid(),
+            Status = AnalysisStatus.Completed,
+            Currency = "EUR",
+            PolicyStatus = PolicyAction.Warn,
+            OverallConfidence = ConfidenceLevel.Low,
+            Environment = "dev"
+        },
+        ProposedResources =
+        [
+            new ResourceEstimate
+            {
+                SourceFile = "infra/main.tf",
+                Provider = "azure",
+                ResourceType = "azurerm_redis_cache",
+                ResourceName = "redis-dev",
+                Sku = "Premium_P_1",
+                Environment = "dev",
+                Category = CostCategory.Database,
+                MonthlyCost = 310,
+                MonthlyDelta = 310,
+                Currency = "EUR",
+                Confidence = ConfidenceLevel.Low,
+                Status = EstimateStatus.Estimated,
+                PricingFallbackUsed = true,
+                PricingFallbackReason = "No exact region match."
+            },
+            new ResourceEstimate
+            {
+                Provider = "azure",
+                ResourceType = "azurerm_unknown_widget",
+                ResourceName = "mystery",
+                Currency = "EUR",
+                Confidence = ConfidenceLevel.Low,
+                Status = EstimateStatus.PriceNotFound
+            }
+        ]
+    };
+    result.Findings = new SpendFindingGenerator().Generate(result);
+
+    Assert(result.Findings.Any(finding => finding.RuleId == "spendgov.confidence.low"), "Expected low-confidence finding.");
+    Assert(result.Findings.Any(finding => finding.RuleId == "spendgov.pricing.fallback"), "Expected pricing fallback finding.");
+    Assert(result.Findings.Any(finding => finding.RuleId == "spendgov.pricing.unknown"), "Expected unknown pricing finding.");
+}
+
+static void ScenarioSarifWriter()
+{
+    const string proposed =
+        """
+        resource "azurerm_service_plan" "api" {
+          name     = "api-plan-dev"
+          location = "westeurope"
+          os_type  = "Linux"
+          sku_name = "P1v3"
+          tags = {
+            environment = "dev"
+          }
+        }
+        """;
+    var result = CreateEngine().Analyze(Request([".spendgov.yml", "main.tf"], [], [
+        new RepositoryFile(".spendgov.yml", PolicyAsCodeDevStrictYaml()),
+        new RepositoryFile("main.tf", proposed)
+    ], Settings(PolicyAsCodeDevStrictYaml()), pr: 48));
+
+    using var document = JsonDocument.Parse(SarifReportWriter.Render(result));
+    var root = document.RootElement;
+    Assert(root.GetProperty("version").GetString() == "2.1.0", "Expected SARIF 2.1.0.");
+    Assert(root.TryGetProperty("$schema", out _), "Expected SARIF schema URI.");
+    var run = root.GetProperty("runs")[0];
+    Assert(run.GetProperty("tool").GetProperty("driver").GetProperty("name").GetString() == "Cloud & AI Spend Governor", "Expected SARIF tool name.");
+    Assert(run.GetProperty("tool").GetProperty("driver").GetProperty("rules").EnumerateArray().Any(rule =>
+        rule.GetProperty("id").GetString() == "spendgov.policy.dev-no-premium-skus"), "Expected policy rule in SARIF.");
+    Assert(run.GetProperty("results").EnumerateArray().Any(item =>
+        item.GetProperty("level").GetString() == "error"
+        && item.GetProperty("locations")[0].GetProperty("physicalLocation").GetProperty("artifactLocation").GetProperty("uri").GetString() == "main.tf"), "Expected error result with source location.");
+
+    var virtualResult = new AnalysisResult
+    {
+        Analysis = new PullRequestAnalysis { Id = Guid.NewGuid(), Currency = "EUR" },
+        Findings =
+        [
+            new SpendFinding
+            {
+                RuleId = "spendgov.test.virtual",
+                Title = "Virtual finding",
+                Message = "No source file available.",
+                Severity = SpendFindingSeverity.Note,
+                Category = "test"
+            }
+        ]
+    };
+    using var virtualDocument = JsonDocument.Parse(SarifReportWriter.Render(virtualResult));
+    var uri = virtualDocument.RootElement.GetProperty("runs")[0].GetProperty("results")[0].GetProperty("locations")[0]
+        .GetProperty("physicalLocation").GetProperty("artifactLocation").GetProperty("uri").GetString();
+    Assert(uri?.StartsWith("spendgov://scan/", StringComparison.Ordinal) == true, "Expected virtual SARIF location when source is missing.");
+}
+
+static void ScenarioGitHubAnnotationWriter()
+{
+    var annotations = GitHubActionsAnnotationWriter.Render([
+        new SpendFinding
+        {
+            RuleId = "spendgov.note",
+            Message = "Skipped note",
+            Severity = SpendFindingSeverity.Note,
+            Category = "pricing"
+        },
+        new SpendFinding
+        {
+            RuleId = "spendgov.warning",
+            Message = "Fallback 50% used\ncheck it",
+            Recommendation = "Fix, then retry.",
+            Severity = SpendFindingSeverity.Warning,
+            Category = "pricing",
+            SourceFile = "infra/main.tf",
+            StartLine = 12,
+            StartColumn = 3
+        },
+        new SpendFinding
+        {
+            RuleId = "spendgov.error",
+            Message = "Policy failed",
+            Severity = SpendFindingSeverity.Error,
+            Category = "policy"
+        }
+    ], SpendFindingSeverity.Warning);
+
+    Assert(!annotations.Contains("::notice", StringComparison.Ordinal), "Expected note to be filtered.");
+    Assert(annotations.Contains("::warning", StringComparison.Ordinal), "Expected warning annotation.");
+    Assert(annotations.Contains("::error", StringComparison.Ordinal), "Expected error annotation.");
+    Assert(annotations.Contains("file=infra/main.tf,line=12,col=3", StringComparison.Ordinal), "Expected source location properties.");
+    Assert(annotations.Contains("50%25 used%0Acheck it", StringComparison.Ordinal), "Expected annotation data escaping.");
+}
+
 static async Task ScenarioCliEmitsMarkdownAndJson()
 {
     var root = CreateCliFixture();
@@ -826,12 +1341,47 @@ static async Task ScenarioCliEmitsMarkdownAndJson()
     var markdownText = await File.ReadAllTextAsync(markdown);
     Assert(markdownText.Contains("Cloud & AI Spend Governor Report", StringComparison.Ordinal), "Expected PR markdown report heading.");
     Assert(markdownText.Contains("Status: FAIL", StringComparison.Ordinal), "Expected expensive fixture to fail policy in markdown.");
+    Assert(markdownText.Contains("## CI Findings", StringComparison.Ordinal), "Expected Markdown CI findings section.");
 
     using var document = JsonDocument.Parse(await File.ReadAllTextAsync(json));
     var rootElement = document.RootElement;
     Assert(rootElement.GetProperty("decision").GetString() == "FAIL", "Expected JSON decision FAIL.");
     Assert(rootElement.GetProperty("repository").GetString() == "acme/shop-api", "Expected repository metadata in JSON.");
     Assert(rootElement.GetProperty("resources").GetArrayLength() > 0, "Expected JSON resources.");
+    Assert(rootElement.GetProperty("findings").GetArrayLength() > 0, "Expected JSON findings.");
+    Assert(rootElement.GetProperty("policyAsCodeEvaluations").EnumerateArray().Any(item =>
+        item.GetProperty("policyId").GetString() == "dev-no-premium-skus"
+        && item.GetProperty("matched").GetBoolean()), "Expected JSON policy-as-code evaluations.");
+    Assert(!File.Exists(Path.Combine(root, "spendgov.sarif")), "Expected CLI not to write SARIF when option is missing.");
+}
+
+static async Task ScenarioCliSarifAndAnnotations()
+{
+    var root = CreateCliFixture();
+    var markdown = Path.Combine(root, "artifacts", "spendgov-report.md");
+    var json = Path.Combine(root, "artifacts", "spendgov-report.json");
+    var sarif = Path.Combine(root, "artifacts", "spendgov.sarif");
+    using var output = new StringWriter();
+    using var error = new StringWriter();
+    var exitCode = await SpendGovCliRunner.RunAsync([
+        "scan",
+        "--path", root,
+        "--markdown", markdown,
+        "--json", json,
+        "--output-sarif", sarif,
+        "--github-annotations",
+        "--annotations-min-severity", "warning",
+        "--fail-on", "never",
+        "--repository", "acme/shop-api",
+        "--pr-number", "42",
+        "--head-branch", "feature/dev-premium-redis"
+    ], output, error);
+
+    Assert(exitCode == 0, $"Expected fail-on never to exit 0, got {exitCode}. Error: {error}");
+    Assert(File.Exists(sarif), "Expected SARIF report file.");
+    Assert(output.ToString().Contains("::error", StringComparison.Ordinal), "Expected GitHub error annotation output.");
+    using var sarifDocument = JsonDocument.Parse(await File.ReadAllTextAsync(sarif));
+    Assert(sarifDocument.RootElement.GetProperty("version").GetString() == "2.1.0", "Expected SARIF version.");
 }
 
 static async Task ScenarioCliPolicyExitCode()
@@ -849,6 +1399,56 @@ static async Task ScenarioCliPolicyExitCode()
     ]);
 
     Assert(exitCode == 2, $"Expected policy failure exit code 2, got {exitCode}.");
+}
+
+static async Task ScenarioCliInvalidPolicyConfigExitCode()
+{
+    var root = Path.Combine(Path.GetTempPath(), "spendgov-cli-invalid-policy-tests", Guid.NewGuid().ToString("n"));
+    var infra = Path.Combine(root, "infra");
+    Directory.CreateDirectory(infra);
+    await File.WriteAllTextAsync(Path.Combine(root, ".spendgov.yml"), """
+        version: 1
+        policies:
+          - id: broken-policy
+            severity: maybe
+            match:
+              unknownField: nope
+            message:
+        """);
+    await File.WriteAllTextAsync(Path.Combine(infra, "main.tf"), """
+        resource "azurerm_service_plan" "app_plan" {
+          name     = "app-plan-dev"
+          location = "westeurope"
+          os_type  = "Linux"
+          sku_name = "B1"
+        }
+        """);
+
+    var exitCode = await RunCli([
+        "scan",
+        "--path", root,
+        "--markdown", Path.Combine(root, "report.md"),
+        "--json", Path.Combine(root, "report.json"),
+        "--fail-on", "never",
+        "--repository", "acme/shop-api",
+        "--pr-number", "42"
+    ]);
+
+    Assert(exitCode == 2, $"Expected invalid policy config exit code 2, got {exitCode}.");
+}
+
+static void ScenarioGitHubActionSarifInputs()
+{
+    var primary = File.ReadAllText(".github/actions/spendgov/action.yml");
+    var alias = File.ReadAllText(".github/actions/spendgov-scan/action.yml");
+
+    foreach (var action in new[] { primary, alias })
+    {
+        Assert(action.Contains("output-sarif", StringComparison.Ordinal), "Expected output-sarif input.");
+        Assert(action.Contains("github-annotations", StringComparison.Ordinal), "Expected github-annotations input.");
+        Assert(action.Contains("--output-sarif", StringComparison.Ordinal), "Expected SARIF CLI flag wiring.");
+        Assert(action.Contains("--github-annotations", StringComparison.Ordinal), "Expected annotation CLI flag wiring.");
+    }
 }
 
 static async Task<int> RunCli(string[] args)
@@ -886,6 +1486,16 @@ static string CreateCliFixture()
           dev:
             monthlyBudget: 100
             action: block
+
+        policies:
+          - id: dev-no-premium-skus
+            title: Block premium development SKUs
+            severity: fail
+            environments: [dev]
+            match:
+              skuContainsAny: [Premium, P1v3]
+            message: "Premium cloud SKUs are not allowed in dev."
+            recommendation: "Use a cheaper development SKU."
         """);
     File.WriteAllText(Path.Combine(infra, "main.tf"), """
         resource "azurerm_service_plan" "app_plan" {
@@ -1197,7 +1807,8 @@ static void ScenarioPolicyValidation()
 
     var parsed = SpendGovConfigParser.Parse(invalid, Settings(invalid));
     Assert(parsed.Errors.Any(error => error.Contains("Unsupported currency", StringComparison.OrdinalIgnoreCase)), "Expected unsupported currency error.");
-    Assert(parsed.Errors.Any(error => error.Contains("Unsupported top-level section 'budgets'", StringComparison.OrdinalIgnoreCase)), "Expected unknown section error.");
+    Assert(parsed.Errors.Any(error => error.Contains("Budget maxMonthlyDelta must be numeric", StringComparison.OrdinalIgnoreCase)), "Expected invalid budget number error.");
+    Assert(!parsed.Errors.Any(error => error.Contains("Unsupported top-level section 'budgets'", StringComparison.OrdinalIgnoreCase)), "Expected budgets to be a supported section.");
     Assert(parsed.Errors.Any(error => error.Contains("unsupported type", StringComparison.OrdinalIgnoreCase)), "Expected unknown rule type error.");
     Assert(parsed.Errors.Any(error => error.Contains("dev", StringComparison.OrdinalIgnoreCase) && error.Contains("monthlyBudget", StringComparison.OrdinalIgnoreCase)), "Expected missing budget error.");
 }

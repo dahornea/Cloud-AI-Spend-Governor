@@ -19,7 +19,7 @@ dotnet build CloudAiSpendGovernor.slnx
 The scenario suite covers:
 
 - Basic PR analysis outcomes.
-- CLI Markdown/JSON output and CI exit-code behavior.
+- CLI Markdown/JSON/SARIF output, annotations, and CI exit-code behavior.
 - Terraform plan JSON detection, parsing, deltas, removals, and invalid input.
 - Bicep compiled ARM JSON detection, parsing, expression handling, persistence, and report metadata.
 - Raw Terraform/Bicep fallback behavior.
@@ -55,4 +55,4 @@ dotnet build CloudAiSpendGovernor.slnx --configuration Release --no-restore
 dotnet run --configuration Release --no-build --project tests/SpendGovernor.Tests/SpendGovernor.Tests.csproj
 ```
 
-CI also runs a CLI smoke scan against `demo/scenario-expensive-cloud-change` and writes Markdown/JSON reports under `artifacts/`.
+CI also runs a CLI smoke scan against `demo/scenario-expensive-cloud-change` and writes Markdown/JSON/SARIF reports under `artifacts/`.

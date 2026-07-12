@@ -1,0 +1,70 @@
+name: SpendGov Scan Demo
+
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+      - "bicep/**"
+      - "demo/**"
+      - "ai-spend.yml"
+      - ".spendgov.yml"
+      - ".github/workflows/spendgov-scan-demo.yml"
+
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+
+jobs:
+  spendgov:
+    name: Cloud and AI spend diagnostics
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore CloudAiSpendGovernor.slnx --configfile NuGet.Config
+
+      - name: Run Spend Governor
+        uses: ./.github/actions/spendgov-scan
+        with:
+          path: "demo/scenario-expensive-cloud-change"
+          markdown-report: "artifacts/spendgov-report.md"
+          json-report: "artifacts/spendgov-report.json"
+          output-sarif: "artifacts/spendgov.sarif"
+          github-annotations: "true"
+          annotations-min-severity: "warning"
+          fail-on: "never"
+          repository: ${{ github.repository }}
+          pr-number: ${{ github.event.pull_request.number }}
+          base-branch: ${{ github.base_ref }}
+          head-branch: ${{ github.head_ref }}
+          commit-sha: ${{ github.sha }}
+
+      - name: Add report to Step Summary
+        if: always()
+        run: cat artifacts/spendgov-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload SpendGov reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spendgov-reports
+          path: |
+            artifacts/spendgov-report.md
+            artifacts/spendgov-report.json
+            artifacts/spendgov.sarif
+
+      # Optional: upload SARIF to GitHub Code Scanning if enabled for the repository.
+      # Change fail-on above to "fail" when you want this workflow to block on FAIL decisions.
+      # - name: Upload SARIF
+      #   uses: github/codeql-action/upload-sarif@v3
+      #   with:
+      #     sarif_file: artifacts/spendgov.sarif

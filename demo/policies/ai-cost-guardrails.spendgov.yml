@@ -1,0 +1,35 @@
+version: 1
+environment: production
+currency: EUR
+defaultRegion: westeurope
+hoursPerMonth: 730
+
+ai:
+  enabled: true
+  monthlyBudget: 300
+  maxCostPerWorkflowMonthly: 100
+  action: warn
+
+policies:
+  - id: ai-expensive-model-high-volume
+    title: "Expensive AI model on high-volume workflow"
+    severity: fail
+    match:
+      type: aiWorkflow
+      modelIn:
+        - gpt-4.1
+        - gpt-4o
+    condition:
+      estimatedMonthlyCostGreaterThan: 250
+    message: "High-volume workflow uses an expensive model."
+    recommendation: "Use a smaller model, reduce token usage, or lower monthly runs."
+
+  - id: ai-low-confidence-warning
+    title: "Warn on low-confidence AI estimates"
+    severity: warn
+    match:
+      type: aiWorkflow
+    condition:
+      confidenceBelow: Medium
+    message: "This AI workflow estimate has low confidence."
+    recommendation: "Provide model, token, and run-count assumptions explicitly."

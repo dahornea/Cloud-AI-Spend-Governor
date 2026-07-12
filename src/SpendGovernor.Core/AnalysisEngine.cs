@@ -11,6 +11,8 @@ public sealed class AnalysisEngine
     private readonly AiSpendParser aiSpendParser = new();
     private readonly MonthlyCostEstimator estimator;
     private readonly PolicyEngine policyEngine = new();
+    private readonly SpendPolicyEvaluator spendPolicyEvaluator = new();
+    private readonly SpendFindingGenerator spendFindingGenerator = new();
     private readonly RecommendationEngine recommendationEngine = new();
 
     public AnalysisEngine(MonthlyCostEstimator estimator)
@@ -103,7 +105,7 @@ public sealed class AnalysisEngine
             analysis.ProposedMonthlyCost = decimal.Round(proposedCost, 2);
             analysis.MonthlyDelta = decimal.Round(proposedCost - baselineCost, 2);
             analysis.UnknownResourceCount = proposedResources.Count(resource => resource.Status != EstimateStatus.Estimated || resource.MonthlyCost is null);
-            analysis.Environment = DetermineEnvironment(proposedResources, request.HeadBranch);
+            analysis.Environment = DetermineEnvironment(proposedResources, request.HeadBranch) ?? config.Environment;
             analysis.OverallConfidence = DetermineOverallConfidence(proposedResources);
             analysis.BudgetLimitMonthly = DetermineBudgetLimit(config, analysis.Environment);
             analysis.Status = AnalysisStatus.Completed;
@@ -145,9 +147,25 @@ public sealed class AnalysisEngine
                     .ToArray();
             }
 
+            result.PolicyFindings = findings;
+            var policyAsCodeEvaluations = spendPolicyEvaluator.Evaluate(result, config, findings);
+            var customPolicyFindings = policyAsCodeEvaluations
+                .Where(evaluation => evaluation.Matched && evaluation.Severity is SpendPolicySeverity.Warn or SpendPolicySeverity.Fail)
+                .Select(evaluation => new PolicyFinding
+                {
+                    AnalysisId = analysis.Id,
+                    RuleId = evaluation.PolicyId,
+                    Action = evaluation.Severity == SpendPolicySeverity.Fail ? PolicyAction.Block : PolicyAction.Warn,
+                    Message = string.IsNullOrWhiteSpace(evaluation.Message)
+                        ? $"Policy {evaluation.PolicyId} matched."
+                        : evaluation.Message
+                })
+                .ToArray();
+            findings = findings.Concat(customPolicyFindings).ToArray();
             analysis.PolicyStatus = PolicyEngine.FinalAction(findings);
             analysis.BudgetLimitMonthly = DetermineBudgetLimit(config, analysis.Environment, findings);
             result.PolicyFindings = findings;
+            result.PolicyAsCodeEvaluations = policyAsCodeEvaluations;
             var recommendations = recommendationEngine.Generate(result);
             foreach (var change in changes)
             {
@@ -159,6 +177,7 @@ public sealed class AnalysisEngine
             }
 
             result.Recommendations = recommendations;
+            result.Findings = spendFindingGenerator.Generate(result);
             result.CommentMarkdown = PrCommentRenderer.Render(result);
             result.CheckConclusion = analysis.PolicyStatus switch
             {
@@ -259,9 +278,9 @@ public sealed class AnalysisEngine
 
         if (!string.IsNullOrWhiteSpace(environment)
             && config.Environments.TryGetValue(environment, out var environmentBudget)
-            && environmentBudget.MonthlyBudget > 0)
+            && (environmentBudget.MaxMonthlyDelta is not null || environmentBudget.MaxMonthlyCost is not null || environmentBudget.MonthlyBudget > 0))
         {
-            return environmentBudget.MonthlyBudget;
+            return environmentBudget.MaxMonthlyDelta ?? environmentBudget.MaxMonthlyCost ?? environmentBudget.MonthlyBudget;
         }
 
         return config.Rules

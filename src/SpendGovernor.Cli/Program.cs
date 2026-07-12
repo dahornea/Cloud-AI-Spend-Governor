@@ -68,6 +68,15 @@ public static class SpendGovCliRunner
             var report = RunScan(options);
             await WriteReportAsync(options.MarkdownReportPath, report.Markdown, output);
             await WriteReportAsync(options.JsonReportPath, JsonSerializer.Serialize(report.Json, JsonOptions), output);
+            if (!string.IsNullOrWhiteSpace(options.SarifReportPath))
+            {
+                await WriteReportAsync(options.SarifReportPath, SarifReportWriter.Render(report.Result), output);
+            }
+
+            if (options.GitHubAnnotations)
+            {
+                await output.WriteAsync(GitHubActionsAnnotationWriter.Render(report.Result.Findings, options.AnnotationsMinSeverity));
+            }
 
             var summary = $"SpendGov decision: {report.Json.Decision}; monthly delta: {FormatMoney(report.Json.MonthlyDelta, report.Json.Currency)}; confidence: {report.Json.Confidence}; check: {report.Json.CheckConclusion}";
             if (options.MarkdownReportPath == "-")
@@ -79,6 +88,10 @@ public static class SpendGovCliRunner
                 await output.WriteLineAsync(summary);
                 await output.WriteLineAsync($"Markdown report: {NormalizeDisplayPath(options.MarkdownReportPath)}");
                 await output.WriteLineAsync($"JSON report: {NormalizeDisplayPath(options.JsonReportPath)}");
+                if (!string.IsNullOrWhiteSpace(options.SarifReportPath))
+                {
+                    await output.WriteLineAsync($"SARIF report: {NormalizeDisplayPath(options.SarifReportPath)}");
+                }
             }
 
             return DetermineExitCode(report.Json, options.FailOn);
@@ -130,7 +143,7 @@ public static class SpendGovCliRunner
         var engine = new AnalysisEngine(new MonthlyCostEstimator(JsonPricingCatalogService.LoadDefault()));
         var result = engine.Analyze(request);
         var json = SpendGovJsonReport.FromResult(result, proposedRoot, baselineRoot, options);
-        return new SpendGovCliReport(result.CommentMarkdown, json);
+        return new SpendGovCliReport(result.CommentMarkdown, json, result);
     }
 
     private static RepositoryIdentity ParseRepository(string? repository, string owner, string name)
@@ -210,6 +223,11 @@ public static class SpendGovCliRunner
             return 3;
         }
 
+        if (report.ConfigErrors.Count > 0)
+        {
+            return 2;
+        }
+
         if (failOn == FailOnLevel.Never)
         {
             return 0;
@@ -250,6 +268,9 @@ public static class SpendGovCliRunner
           --changed-files <paths>           Comma/semicolon/newline separated changed file paths.
           --markdown <path|->               Markdown report path, or '-' for stdout. Defaults to spendgov-report.md.
           --json <path|->                   JSON report path, or '-' for stdout. Defaults to spendgov-report.json.
+          --output-sarif <path>             Optional SARIF 2.1.0 report path.
+          --github-annotations [true|false] Emit GitHub Actions annotations. Defaults to false.
+          --annotations-min-severity <level> Minimum annotation severity: note, warning, error. Defaults to warning.
           --fail-on <fail|warn|never>       Exit non-zero on FAIL, WARN-or-higher, or never. Defaults to fail.
           --repository <owner/name>         Repository identity for report links.
           --repo-owner <owner>              Repository owner. Defaults to local.
@@ -267,12 +288,12 @@ public static class SpendGovCliRunner
         Exit codes:
           0 success
           1 CLI usage or file I/O error
-          2 policy threshold failed for the configured --fail-on level
+          2 invalid config or policy threshold failed for the configured --fail-on level
           3 scan engine failed unexpectedly
         """;
 }
 
-public sealed record SpendGovCliReport(string Markdown, SpendGovJsonReport Json);
+public sealed record SpendGovCliReport(string Markdown, SpendGovJsonReport Json, AnalysisResult Result);
 
 public sealed record RepositoryIdentity(string Owner, string Name);
 
@@ -289,6 +310,9 @@ public sealed class CliOptions
     public string? BaselinePath { get; private init; }
     public string MarkdownReportPath { get; private init; } = "spendgov-report.md";
     public string JsonReportPath { get; private init; } = "spendgov-report.json";
+    public string? SarifReportPath { get; private init; }
+    public bool GitHubAnnotations { get; private init; }
+    public SpendFindingSeverity AnnotationsMinSeverity { get; private init; } = SpendFindingSeverity.Warning;
     public FailOnLevel FailOn { get; private init; } = FailOnLevel.Fail;
     public string? Repository { get; private init; }
     public string RepositoryOwner { get; private init; } = "local";
@@ -311,6 +335,7 @@ public sealed class CliOptions
         var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var changedFiles = new List<string>();
         var showHelp = false;
+        var githubAnnotations = false;
 
         for (var index = 0; index < args.Length; index++)
         {
@@ -318,6 +343,13 @@ public sealed class CliOptions
             if (arg is "-h" or "--help" or "help")
             {
                 showHelp = true;
+                continue;
+            }
+
+            if (arg is "--github-annotations")
+            {
+                githubAnnotations = index + 1 >= args.Length || args[index + 1].StartsWith("-", StringComparison.Ordinal)
+                    || ParseBool(ReadValue(args, ref index, arg), arg);
                 continue;
             }
 
@@ -337,6 +369,7 @@ public sealed class CliOptions
             {
                 "-p" => "--path",
                 "--path" or "--baseline-path" or "--markdown" or "--markdown-report" or "--json" or "--json-report"
+                    or "--output-sarif" or "--sarif" or "--annotations-min-severity"
                     or "--fail-on" or "--repository" or "--repo-owner" or "--repo-name" or "--pr-number"
                     or "--base-branch" or "--head-branch" or "--commit-sha" or "--provider" or "--currency"
                     or "--default-region" or "--hours-per-month" or "--dashboard-url" => arg,
@@ -353,6 +386,9 @@ public sealed class CliOptions
             BaselinePath = GetNullable(values, "--baseline-path"),
             MarkdownReportPath = Get(values, "--markdown", Get(values, "--markdown-report", "spendgov-report.md")),
             JsonReportPath = Get(values, "--json", Get(values, "--json-report", "spendgov-report.json")),
+            SarifReportPath = GetNullable(values, "--output-sarif") ?? GetNullable(values, "--sarif"),
+            GitHubAnnotations = githubAnnotations,
+            AnnotationsMinSeverity = ParseAnnotationSeverity(Get(values, "--annotations-min-severity", "warning")),
             FailOn = ParseFailOn(Get(values, "--fail-on", "fail")),
             Repository = GetNullable(values, "--repository"),
             RepositoryOwner = Get(values, "--repo-owner", "local"),
@@ -398,6 +434,27 @@ public sealed class CliOptions
             "warn" or "warning" => FailOnLevel.Warn,
             "never" or "none" => FailOnLevel.Never,
             _ => throw new CliUsageException("--fail-on must be one of: fail, warn, never.")
+        };
+    }
+
+    private static SpendFindingSeverity ParseAnnotationSeverity(string value)
+    {
+        return value.ToLowerInvariant() switch
+        {
+            "note" or "notice" or "info" => SpendFindingSeverity.Note,
+            "warning" or "warn" => SpendFindingSeverity.Warning,
+            "error" or "fail" or "failure" => SpendFindingSeverity.Error,
+            _ => throw new CliUsageException("--annotations-min-severity must be one of: note, warning, error.")
+        };
+    }
+
+    private static bool ParseBool(string value, string option)
+    {
+        return value.ToLowerInvariant() switch
+        {
+            "true" or "1" or "yes" or "on" => true,
+            "false" or "0" or "no" or "off" => false,
+            _ => throw new CliUsageException($"{option} must be true or false.")
         };
     }
 
@@ -457,6 +514,8 @@ public sealed record SpendGovJsonReport(
     IReadOnlyList<string> ConfigErrors,
     IReadOnlyList<ResourceJsonItem> Resources,
     IReadOnlyList<CostChangeJsonItem> CostChanges,
+    IReadOnlyList<FindingJsonItem> Findings,
+    IReadOnlyList<PolicyAsCodeJsonItem> PolicyAsCodeEvaluations,
     IReadOnlyList<PolicyFindingJsonItem> PolicyFindings,
     IReadOnlyList<RecommendationJsonItem> Recommendations)
 {
@@ -490,6 +549,8 @@ public sealed record SpendGovJsonReport(
             result.ConfigErrors,
             result.ProposedResources.Select(ResourceJsonItem.FromResource).ToArray(),
             result.CostChanges.Select(CostChangeJsonItem.FromChange).ToArray(),
+            result.Findings.Select(FindingJsonItem.FromFinding).ToArray(),
+            result.PolicyAsCodeEvaluations.Select(PolicyAsCodeJsonItem.FromEvaluation).ToArray(),
             result.PolicyFindings.Select(PolicyFindingJsonItem.FromFinding).ToArray(),
             result.Recommendations.Select(RecommendationJsonItem.FromRecommendation).ToArray());
     }
@@ -573,6 +634,93 @@ public sealed record CostChangeJsonItem(
             change.Region,
             change.Reason,
             change.TerraformAddress);
+    }
+}
+
+public sealed record FindingJsonItem(
+    string Id,
+    string RuleId,
+    string Title,
+    string Message,
+    string? Recommendation,
+    string Severity,
+    string Category,
+    string? SourceFile,
+    int? StartLine,
+    int? StartColumn,
+    int? EndLine,
+    int? EndColumn,
+    string? ResourceName,
+    string? ResourceType,
+    string? Provider,
+    string? Environment,
+    decimal? EstimatedMonthlyCost,
+    decimal? EstimatedMonthlyDelta,
+    string Currency,
+    string? ConfidenceLevel,
+    string? PolicyId,
+    string? PricingSource,
+    string? PricingMatchType)
+{
+    public static FindingJsonItem FromFinding(SpendFinding finding)
+    {
+        return new FindingJsonItem(
+            finding.Id,
+            finding.RuleId,
+            finding.Title,
+            finding.Message,
+            string.IsNullOrWhiteSpace(finding.Recommendation) ? null : finding.Recommendation,
+            FormatSeverity(finding.Severity),
+            finding.Category,
+            finding.SourceFile,
+            finding.StartLine,
+            finding.StartColumn,
+            finding.EndLine,
+            finding.EndColumn,
+            finding.ResourceName,
+            finding.ResourceType,
+            finding.Provider,
+            finding.Environment,
+            finding.EstimatedMonthlyCost,
+            finding.EstimatedMonthlyDelta,
+            finding.Currency,
+            finding.ConfidenceLevel?.ToString(),
+            finding.PolicyId,
+            finding.PricingSource,
+            finding.PricingMatchType);
+    }
+
+    private static string FormatSeverity(SpendFindingSeverity severity) => severity switch
+    {
+        SpendFindingSeverity.Error => "error",
+        SpendFindingSeverity.Warning => "warning",
+        _ => "note"
+    };
+}
+
+public sealed record PolicyAsCodeJsonItem(
+    string PolicyId,
+    string? Title,
+    SpendPolicySeverity Severity,
+    bool Matched,
+    SpendPolicyEvaluationStatus Result,
+    string? MatchedResource,
+    string? MatchedResourceType,
+    string Message,
+    string? Recommendation)
+{
+    public static PolicyAsCodeJsonItem FromEvaluation(SpendPolicyEvaluation evaluation)
+    {
+        return new PolicyAsCodeJsonItem(
+            evaluation.PolicyId,
+            evaluation.Title,
+            evaluation.Severity,
+            evaluation.Matched,
+            evaluation.Result,
+            evaluation.MatchedResource,
+            evaluation.MatchedResourceType,
+            evaluation.Message,
+            evaluation.Recommendation);
     }
 }
 

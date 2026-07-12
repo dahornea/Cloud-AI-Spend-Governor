@@ -9,6 +9,7 @@ public sealed class ScanResultWriter : IScanResultWriter
 {
     private const int MaxAssumptionValueLength = 2000;
     private const string AssumptionTruncationSuffix = "... (truncated; full metadata is stored on the detected resource raw JSON)";
+    private static readonly JsonSerializerOptions PolicyAsCodeJsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly SpendGovernorDbContext dbContext;
 
@@ -263,7 +264,11 @@ public sealed class ScanResultWriter : IScanResultWriter
 
     private static IEnumerable<PolicyEvaluation> BuildPolicyEvaluations(Guid scanId, AnalysisResult result)
     {
-        if (result.PolicyFindings.Count == 0)
+        var policyAsCodeIds = result.PolicyAsCodeEvaluations
+            .Select(evaluation => evaluation.PolicyId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (result.PolicyFindings.Count == 0 && result.PolicyAsCodeEvaluations.Count == 0)
         {
             yield return new PolicyEvaluation
             {
@@ -275,7 +280,7 @@ public sealed class ScanResultWriter : IScanResultWriter
             yield break;
         }
 
-        foreach (var finding in result.PolicyFindings)
+        foreach (var finding in result.PolicyFindings.Where(finding => !policyAsCodeIds.Contains(finding.RuleId)))
         {
             yield return new PolicyEvaluation
             {
@@ -283,6 +288,29 @@ public sealed class ScanResultWriter : IScanResultWriter
                 RuleName = finding.RuleId,
                 Result = ToPolicyRuleResult(finding.Action),
                 Message = finding.Message
+            };
+        }
+
+        foreach (var evaluation in result.PolicyAsCodeEvaluations)
+        {
+            yield return new PolicyEvaluation
+            {
+                PullRequestScanId = scanId,
+                RuleName = $"policy-as-code:{evaluation.PolicyId}",
+                Result = ToPolicyRuleResult(evaluation),
+                Message = JsonSerializer.Serialize(new
+                {
+                    evaluation.PolicyId,
+                    evaluation.Title,
+                    evaluation.Description,
+                    Severity = evaluation.Severity.ToString(),
+                    evaluation.Matched,
+                    Result = evaluation.Result.ToString(),
+                    evaluation.MatchedResource,
+                    evaluation.MatchedResourceType,
+                    evaluation.Message,
+                    evaluation.Recommendation
+                }, PolicyAsCodeJsonOptions)
             };
         }
     }
@@ -321,6 +349,21 @@ public sealed class ScanResultWriter : IScanResultWriter
         PolicyAction.Block => PolicyRuleResult.Fail,
         _ => PolicyRuleResult.Warn
     };
+
+    private static PolicyRuleResult ToPolicyRuleResult(SpendPolicyEvaluation evaluation)
+    {
+        if (!evaluation.Matched)
+        {
+            return PolicyRuleResult.Pass;
+        }
+
+        return evaluation.Severity switch
+        {
+            SpendPolicySeverity.Fail => PolicyRuleResult.Fail,
+            SpendPolicySeverity.Warn => PolicyRuleResult.Warn,
+            _ => PolicyRuleResult.Pass
+        };
+    }
 
     private static string BuildReason(ResourceCostChange change, ResourceEstimate? resource)
     {

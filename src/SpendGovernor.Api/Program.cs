@@ -1054,6 +1054,7 @@ public sealed record AnalysisDetailResponse(
     IReadOnlyList<ResourceEstimate> Resources,
     IReadOnlyList<ResourceCostChange> CostChanges,
     IReadOnlyList<PolicyFinding> PolicyFindings,
+    IReadOnlyList<SpendFinding> Findings,
     IReadOnlyList<Recommendation> Recommendations,
     IReadOnlyList<AuditEvent> AuditEvents,
     string CommentMarkdown,
@@ -1076,6 +1077,7 @@ public sealed record AnalysisDetailResponse(
             result.ProposedResources,
             result.CostChanges,
             result.PolicyFindings,
+            result.Findings,
             result.Recommendations,
             result.AuditEvents,
             result.CommentMarkdown,
@@ -1202,12 +1204,27 @@ public sealed record AnalysisDetailResponse(
             MonthlyDelta = item.EstimatedMonthlyCost ?? 0
         }).ToArray();
 
-        var policyFindings = scan.PolicyEvaluations
+        var policyEvaluationItems = scan.PolicyEvaluations.Select(PolicyEvaluationItem.FromEntity).ToArray();
+        var policyAsCodeEvaluations = policyEvaluationItems
+            .Where(item => item.IsPolicyAsCode)
+            .Select(item => new SpendPolicyEvaluation
+            {
+                PolicyId = item.PolicyId ?? item.RuleName,
+                Title = item.Title ?? "",
+                Severity = ParseSpendPolicySeverity(item.Severity),
+                Matched = item.Matched,
+                Result = ParseSpendPolicyResult(item.PolicyResult),
+                MatchedResource = item.MatchedResource,
+                Message = item.Message,
+                Recommendation = item.Recommendation ?? ""
+            })
+            .ToArray();
+        var policyFindings = policyEvaluationItems
             .Where(evaluation => evaluation.Result != PolicyRuleResult.Pass)
             .Select(evaluation => new PolicyFinding
             {
                 AnalysisId = scan.Id,
-                RuleId = evaluation.RuleName,
+                RuleId = evaluation.PolicyId ?? evaluation.RuleName,
                 Action = evaluation.Result == PolicyRuleResult.Warn ? PolicyAction.Warn : PolicyAction.Block,
                 Message = evaluation.Message
             })
@@ -1220,10 +1237,12 @@ public sealed record AnalysisDetailResponse(
             ProposedResources = resources,
             CostChanges = changes,
             PolicyFindings = policyFindings,
+            PolicyAsCodeEvaluations = policyAsCodeEvaluations,
             Recommendations = recommendations,
             CheckConclusion = checkConclusion,
             DashboardUrl = scan.DashboardReportUrl
         };
+        persistedResult.Findings = new SpendFindingGenerator().Generate(persistedResult);
         var commentMarkdown = PrCommentRenderer.Render(persistedResult);
 
         return new AnalysisDetailResponse(
@@ -1231,6 +1250,7 @@ public sealed record AnalysisDetailResponse(
             resources,
             changes,
             policyFindings,
+            persistedResult.Findings,
             recommendations,
             [],
             commentMarkdown,
@@ -1238,7 +1258,7 @@ public sealed record AnalysisDetailResponse(
             DetectAnalysisSource(resources),
             [],
             scan.ScanAssumptions.Select(ScanAssumptionItem.FromEntity).ToArray(),
-            scan.PolicyEvaluations.Select(PolicyEvaluationItem.FromEntity).ToArray(),
+            policyEvaluationItems,
             scan.GitHubCommentId,
             scan.GitHubCheckRunId,
             scan.GitHubReportUrl,
@@ -1338,6 +1358,20 @@ public sealed record AnalysisDetailResponse(
         return resources.Count == 0 ? "No cost-relevant files" : "Mixed analyzers";
     }
 
+    private static SpendPolicySeverity ParseSpendPolicySeverity(string? severity)
+    {
+        return Enum.TryParse<SpendPolicySeverity>(severity, ignoreCase: true, out var parsed)
+            ? parsed
+            : SpendPolicySeverity.Info;
+    }
+
+    private static SpendPolicyEvaluationStatus ParseSpendPolicyResult(string? result)
+    {
+        return Enum.TryParse<SpendPolicyEvaluationStatus>(result, ignoreCase: true, out var parsed)
+            ? parsed
+            : SpendPolicyEvaluationStatus.NotMatched;
+    }
+
     private static Recommendation Recommendation(PullRequestScan scan, string severity, string title, string description, decimal? savings) => new()
     {
         AnalysisId = scan.Id,
@@ -1355,9 +1389,64 @@ public sealed record ScanAssumptionItem(string Name, string Value)
     public static ScanAssumptionItem FromEntity(ScanAssumption assumption) => new(assumption.Name, assumption.Value);
 }
 
-public sealed record PolicyEvaluationItem(string RuleName, PolicyRuleResult Result, string Message)
+public sealed record PolicyEvaluationItem(
+    string RuleName,
+    PolicyRuleResult Result,
+    string Message,
+    bool IsPolicyAsCode,
+    string? PolicyId,
+    string? Title,
+    string? Severity,
+    bool Matched,
+    string? PolicyResult,
+    string? MatchedResource,
+    string? Recommendation)
 {
-    public static PolicyEvaluationItem FromEntity(PolicyEvaluation evaluation) => new(evaluation.RuleName, evaluation.Result, evaluation.Message);
+    public static PolicyEvaluationItem FromEntity(PolicyEvaluation evaluation)
+    {
+        if (!evaluation.RuleName.StartsWith("policy-as-code:", StringComparison.OrdinalIgnoreCase))
+        {
+            return new PolicyEvaluationItem(evaluation.RuleName, evaluation.Result, evaluation.Message, false, null, null, null, false, null, null, null);
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(evaluation.Message);
+            var root = document.RootElement;
+            var policyId = GetString(root, "policyId") ?? evaluation.RuleName["policy-as-code:".Length..];
+            var message = GetString(root, "message") ?? "";
+            return new PolicyEvaluationItem(
+                evaluation.RuleName,
+                evaluation.Result,
+                message,
+                true,
+                policyId,
+                GetString(root, "title"),
+                GetString(root, "severity"),
+                GetBool(root, "matched"),
+                GetString(root, "result"),
+                GetString(root, "matchedResource"),
+                GetString(root, "recommendation"));
+        }
+        catch (JsonException)
+        {
+            return new PolicyEvaluationItem(evaluation.RuleName, evaluation.Result, evaluation.Message, true, evaluation.RuleName["policy-as-code:".Length..], null, null, evaluation.Result != PolicyRuleResult.Pass, null, null, null);
+        }
+    }
+
+    private static string? GetString(JsonElement root, string name)
+    {
+        return root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : value.ValueKind is JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False
+                ? value.GetRawText()
+                : null;
+    }
+
+    private static bool GetBool(JsonElement root, string name)
+    {
+        return root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.True;
+    }
 }
 
 public sealed record ResourceRawMetadata(

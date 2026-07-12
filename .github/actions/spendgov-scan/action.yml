@@ -1,5 +1,5 @@
-name: Cloud & AI Spend Governor
-description: Run Cloud & AI Spend Governor cost checks in GitHub Actions without deploying the web app.
+name: Cloud & AI Spend Governor Scan
+description: Run Cloud & AI Spend Governor cost checks with Markdown, JSON, SARIF, and annotations.
 
 inputs:
   path:

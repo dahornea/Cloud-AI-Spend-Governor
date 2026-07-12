@@ -11,6 +11,8 @@ dotnet run --project src\SpendGovernor.Cli\SpendGovernor.Cli.csproj -- scan `
   --path demo\scenario-expensive-cloud-change `
   --markdown artifacts\spendgov-report.md `
   --json artifacts\spendgov-report.json `
+  --output-sarif artifacts\spendgov.sarif `
+  --github-annotations `
   --fail-on fail `
   --repository acme/shop-api `
   --pr-number 42 `
@@ -37,22 +39,42 @@ Use `--baseline-path` when you have a before/after directory to compare against.
 The CLI writes:
 
 - a Markdown report, default `spendgov-report.md`;
-- a JSON report, default `spendgov-report.json`.
+- a JSON report, default `spendgov-report.json`;
+- an optional SARIF 2.1.0 report when `--output-sarif` is provided.
 
 Use `--markdown -` or `--json -` to write either report to stdout.
 
-The Markdown report is the same developer-friendly report shape used for GitHub PR comments. The JSON report includes the decision, cost summary, resources, cost changes, policy findings, recommendations, config warnings, confidence, and pricing metadata.
+The Markdown report is the same developer-friendly report shape used for GitHub PR comments. The JSON report includes the decision, cost summary, resources, cost changes, Policy-as-Code evaluations, CI findings, policy findings, recommendations, config warnings, confidence, and pricing metadata.
+
+## SARIF and Annotations
+
+```powershell
+dotnet run --project src\SpendGovernor.Cli\SpendGovernor.Cli.csproj -- scan `
+  --path . `
+  --markdown artifacts\spendgov-report.md `
+  --json artifacts\spendgov-report.json `
+  --output-sarif artifacts\spendgov.sarif `
+  --github-annotations `
+  --annotations-min-severity warning `
+  --fail-on fail
+```
+
+`--output-sarif` writes a SARIF 2.1.0 report that can be uploaded as an artifact or optionally sent to GitHub Code Scanning.
+
+`--github-annotations` emits GitHub workflow commands such as `::error` and `::warning`, so findings can appear inline in Actions logs. `--annotations-min-severity` accepts `note`, `warning`, or `error`; the default is `warning`.
+
+Findings are generated for budget failures, Policy-as-Code matches, high monthly impact resources/workflows, low-confidence estimates, pricing fallback, unknown pricing, and config/analyzer warnings.
 
 ## Exit Codes
 
 ```txt
 0 success
 1 CLI usage or file I/O error
-2 policy threshold failed for the configured --fail-on level
+2 invalid config or policy threshold failed for the configured --fail-on level
 3 scan engine failed unexpectedly
 ```
 
-`--fail-on fail` is the default and exits `2` for `FAIL` decisions caused by block or approval-required policy findings.
+`--fail-on fail` is the default and exits `2` for invalid config or `FAIL` decisions caused by block or approval-required policy findings.
 
 `--fail-on warn` exits `2` for `WARN` or `FAIL`.
 
@@ -96,6 +118,9 @@ jobs:
           path: "."
           markdown-report: "artifacts/spendgov-report.md"
           json-report: "artifacts/spendgov-report.json"
+          output-sarif: "artifacts/spendgov.sarif"
+          github-annotations: "true"
+          annotations-min-severity: "warning"
           fail-on: "fail"
           repository: ${{ github.repository }}
           pr-number: ${{ github.event.pull_request.number }}
@@ -109,6 +134,8 @@ jobs:
           name: spendgov-reports
           path: artifacts/
 ```
+
+The repository also includes `.github/actions/spendgov-scan/action.yml` as an alias with the same SARIF and annotation inputs.
 
 ## Notes
 

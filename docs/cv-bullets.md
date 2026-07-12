@@ -13,6 +13,8 @@ Cloud & AI Spend Governor is a .NET SaaS-style developer tool that analyzes infr
 - Implemented versioned Azure and AI pricing catalogs, optional Azure Retail Prices API lookup, and confidence-aware pricing metadata.
 - Built GitHub webhook/reporting support with HMAC verification, simulated local mode, real GitHub App PR comments/check runs, and idempotent report updates.
 - Added a .NET CLI and local GitHub Action wrapper so the same cost checks can run in CI without deploying the web app.
+- Added Policy-as-Code support through `.spendgov.yml`, enabling custom spend guardrails for cloud resources and AI workflows across the web app, CLI, and GitHub Action.
+- Added SARIF output and GitHub Actions annotations for cloud/AI spend findings, allowing cost policy violations to appear directly in CI workflows with source-aware diagnostics.
 - Added development-only demo seed/reset flows that create realistic persisted scans for cheap cloud, expensive cloud, and expensive AI workflow scenarios.
 - Created portfolio-ready documentation, screenshot walkthroughs, sample PR reports, local setup guidance, and honest MVP limitations.
 - Added a console scenario suite covering analyzers, pricing, policy evaluation, persistence, GitHub signatures/reporting, queue behavior, and dashboard mapping.

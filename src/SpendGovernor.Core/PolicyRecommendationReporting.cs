@@ -44,7 +44,8 @@ public sealed class PolicyEngine
             var total = result.ProposedResources
                 .Where(resource => resource.Environment?.Equals(environment.Key, StringComparison.OrdinalIgnoreCase) == true)
                 .Sum(resource => resource.MonthlyCost ?? 0);
-            if (total > environment.Value.MonthlyBudget)
+            var monthlyBudget = environment.Value.MaxMonthlyCost ?? environment.Value.MonthlyBudget;
+            if (monthlyBudget > 0 && total > monthlyBudget)
             {
                 findings.Add(new PolicyFinding
                 {
@@ -52,10 +53,51 @@ public sealed class PolicyEngine
                     RuleId = $"environment-budget-{environment.Key}",
                     Action = environment.Value.Action,
                     ActualValue = total,
-                    ThresholdValue = environment.Value.MonthlyBudget,
-                    Message = $"{environment.Key} monthly estimate {FormatMoney(total, analysis.Currency)} exceeds budget {FormatMoney(environment.Value.MonthlyBudget, analysis.Currency)}."
+                    ThresholdValue = monthlyBudget,
+                    Message = $"{environment.Key} monthly estimate {FormatMoney(total, analysis.Currency)} exceeds budget {FormatMoney(monthlyBudget, analysis.Currency)}."
                 });
             }
+
+            if (environment.Value.MaxMonthlyDelta is { } maxMonthlyDelta
+                && analysis.Environment?.Equals(environment.Key, StringComparison.OrdinalIgnoreCase) == true
+                && analysis.MonthlyDelta > maxMonthlyDelta)
+            {
+                findings.Add(new PolicyFinding
+                {
+                    AnalysisId = analysis.Id,
+                    RuleId = $"environment-delta-budget-{environment.Key}",
+                    Action = environment.Value.Action,
+                    ActualValue = analysis.MonthlyDelta,
+                    ThresholdValue = maxMonthlyDelta,
+                    Message = $"{environment.Key} monthly delta {FormatMoney(analysis.MonthlyDelta ?? 0, analysis.Currency)} exceeds delta budget {FormatMoney(maxMonthlyDelta, analysis.Currency)}."
+                });
+            }
+        }
+
+        if (config.GovernanceRules.RequireApprovalAbove is { } approvalThreshold
+            && analysis.MonthlyDelta > approvalThreshold)
+        {
+            findings.Add(new PolicyFinding
+            {
+                AnalysisId = analysis.Id,
+                RuleId = "require-approval-above",
+                Action = PolicyAction.ApprovalRequired,
+                ActualValue = analysis.MonthlyDelta,
+                ThresholdValue = approvalThreshold,
+                Message = $"Monthly delta {FormatMoney(analysis.MonthlyDelta ?? 0, analysis.Currency)} requires approval above {FormatMoney(approvalThreshold, analysis.Currency)}."
+            });
+        }
+
+        if (config.GovernanceRules.WarnOnLowConfidence
+            && analysis.OverallConfidence is ConfidenceLevel.Low or ConfidenceLevel.Unknown)
+        {
+            findings.Add(new PolicyFinding
+            {
+                AnalysisId = analysis.Id,
+                RuleId = "warn-low-confidence",
+                Action = PolicyAction.Warn,
+                Message = "Scan confidence is low; use Terraform Plan JSON or compiled ARM JSON for more accurate estimates."
+            });
         }
 
         if (config.Ai.Enabled)
@@ -336,6 +378,7 @@ public static class PrCommentRenderer
         builder.AppendLine();
 
         AppendAnalysisSource(builder, result);
+        AppendCiFindings(builder, result);
 
         if (result.CostChanges.Count > 0)
         {
@@ -394,6 +437,8 @@ public static class PrCommentRenderer
 
             builder.AppendLine();
         }
+
+        AppendPolicyAsCode(builder, result);
 
         if (result.PolicyFindings.Count > 0)
         {
@@ -457,6 +502,71 @@ public static class PrCommentRenderer
 
         return builder.ToString();
     }
+
+    private static void AppendCiFindings(StringBuilder builder, AnalysisResult result)
+    {
+        if (result.Findings.Count == 0)
+        {
+            return;
+        }
+
+        builder.AppendLine("## CI Findings");
+        builder.AppendLine();
+        builder.AppendLine("| Severity | Rule | Location | Message |");
+        builder.AppendLine("|---|---|---|---|");
+        foreach (var finding in result.Findings.Take(15))
+        {
+            builder.AppendLine($"| {Escape(finding.Severity.ToString().ToUpperInvariant())} | `{Escape(finding.RuleId)}` | {Escape(FormatFindingLocation(finding))} | {Escape(finding.Message)} |");
+        }
+
+        builder.AppendLine();
+    }
+
+    private static string FormatFindingLocation(SpendFinding finding)
+    {
+        if (string.IsNullOrWhiteSpace(finding.SourceFile))
+        {
+            return "-";
+        }
+
+        return finding.StartLine is { } line
+            ? $"{finding.SourceFile}:{line}"
+            : finding.SourceFile;
+    }
+
+    private static void AppendPolicyAsCode(StringBuilder builder, AnalysisResult result)
+    {
+        if (result.PolicyAsCodeEvaluations.Count == 0)
+        {
+            return;
+        }
+
+        builder.AppendLine("## Policy-as-Code");
+        builder.AppendLine();
+        builder.AppendLine("| Policy | Severity | Result | Message | Recommendation |");
+        builder.AppendLine("|---|---|---|---|---|");
+        foreach (var evaluation in result.PolicyAsCodeEvaluations.Take(12))
+        {
+            var resultText = evaluation.Matched ? FormatPolicyAsCodeResult(evaluation.Result) : "Not matched";
+            var message = string.IsNullOrWhiteSpace(evaluation.Message) ? "-" : evaluation.Message;
+            if (!string.IsNullOrWhiteSpace(evaluation.MatchedResource))
+            {
+                message = $"{message} Matched: {evaluation.MatchedResource}.";
+            }
+
+            builder.AppendLine($"| {Escape(evaluation.PolicyId)} | {Escape(evaluation.Severity.ToString().ToUpperInvariant())} | {Escape(resultText)} | {Escape(message)} | {Escape(string.IsNullOrWhiteSpace(evaluation.Recommendation) ? "-" : evaluation.Recommendation)} |");
+        }
+
+        builder.AppendLine();
+    }
+
+    private static string FormatPolicyAsCodeResult(SpendPolicyEvaluationStatus status) => status switch
+    {
+        SpendPolicyEvaluationStatus.Fail => "Fail",
+        SpendPolicyEvaluationStatus.Warn => "Warn",
+        SpendPolicyEvaluationStatus.Info => "Info",
+        _ => "Not matched"
+    };
 
     private static IEnumerable<string> BuildAssumptions(AnalysisResult result)
     {

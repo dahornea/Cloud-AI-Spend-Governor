@@ -608,7 +608,9 @@ function renderAnalysisDetail() {
       ${renderResources(detail.resources, analysis.currency)}
       ${renderArmMetadata(detail.resources, analysis.currency)}
       ${renderPricingMetadata(detail.resources)}
+      ${renderPolicyAsCodeEvaluations(detail.policyEvaluations)}
       ${renderPolicyEvaluations(detail.policyEvaluations, detail.assumptions)}
+      ${renderCiFindings(detail.findings)}
       ${renderFindings(detail.policyFindings)}
       ${renderAssumptions(detail.assumptions)}
       ${renderGithubMetadata(detail)}
@@ -756,6 +758,36 @@ function renderFindings(findings) {
       <div><span class="pill ${cssToken(finding.action)}">${humanPolicy(finding.action)}</span> <strong>${escapeHtml(finding.ruleId)}</strong><br>${escapeHtml(finding.message)}</div>`).join("")}</div>`;
 }
 
+function renderCiFindings(findings) {
+  if (!findings || findings.length === 0) {
+    return `<h3>CI Findings</h3>${emptyPanel("No CI findings", "The scan did not produce SARIF or annotation-style diagnostics.")}`;
+  }
+
+  return `
+    <h3>CI Findings</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Severity</th><th>Rule ID</th><th>Category</th><th>Location</th><th>Resource / Workflow</th><th>Message</th><th>Recommendation</th></tr></thead>
+      <tbody>${findings.map((finding) => `
+        <tr>
+          <td>${findingSeverityBadge(finding.severity)}</td>
+          <td><code>${escapeHtml(finding.ruleId || "-")}</code></td>
+          <td>${escapeHtml(finding.category || "-")}</td>
+          <td>${escapeHtml(formatFindingLocation(finding))}</td>
+          <td>${escapeHtml(finding.resourceName || "-")}<br><small>${escapeHtml(finding.resourceType || "-")}</small></td>
+          <td>${escapeHtml(finding.message || "-")}</td>
+          <td>${escapeHtml(finding.recommendation || "-")}</td>
+        </tr>`).join("")}</tbody>
+    </table></div>`;
+}
+
+function formatFindingLocation(finding) {
+  if (!finding || !finding.sourceFile) {
+    return "-";
+  }
+
+  return finding.startLine ? `${finding.sourceFile}:${finding.startLine}` : finding.sourceFile;
+}
+
 function renderAssumptions(assumptions) {
   if (!assumptions || assumptions.length === 0) {
     return `<h3>Assumptions</h3>${emptyPanel("No assumptions saved", "This scan did not persist analyzer or pricing assumptions.")}`;
@@ -771,6 +803,7 @@ function renderAssumptions(assumptions) {
 }
 
 function renderPolicyEvaluations(evaluations, assumptions) {
+  evaluations = (evaluations || []).filter((item) => !item.isPolicyAsCode);
   if (!evaluations || evaluations.length === 0) {
     return `<h3>Policy Evaluations</h3>${emptyPanel("No policy evaluations", "No policy rules were evaluated for this scan.")}`;
   }
@@ -782,6 +815,29 @@ function renderPolicyEvaluations(evaluations, assumptions) {
       <thead><tr><th>Rule</th><th>Result</th><th>Budget source</th><th>Message</th></tr></thead>
       <tbody>${evaluations.map((item) => `
         <tr><td>${escapeHtml(item.ruleName)}</td><td>${policyResultBadge(item.result)}</td><td>${escapeHtml(budgetSource)}</td><td>${escapeHtml(item.message)}</td></tr>`).join("")}</tbody>
+    </table></div>`;
+}
+
+function renderPolicyAsCodeEvaluations(evaluations) {
+  const policies = (evaluations || []).filter((item) => item.isPolicyAsCode);
+  if (policies.length === 0) {
+    return `<h3>Policy-as-Code Evaluations</h3>${emptyPanel("No custom spend policies", "No custom spend policies were configured for this scan.")}`;
+  }
+
+  return `
+    <h3>Policy-as-Code Evaluations</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Policy ID</th><th>Title</th><th>Severity</th><th>Result</th><th>Matched resource/workflow</th><th>Message</th><th>Recommendation</th></tr></thead>
+      <tbody>${policies.map((item) => `
+        <tr>
+          <td><strong>${escapeHtml(item.policyId || item.ruleName)}</strong></td>
+          <td>${escapeHtml(item.title || "-")}</td>
+          <td>${policySeverityBadge(item.severity || "info")}</td>
+          <td>${policyAsCodeResultBadge(item)}</td>
+          <td>${escapeHtml(item.matchedResource || "-")}</td>
+          <td>${escapeHtml(item.message || "-")}</td>
+          <td>${escapeHtml(item.recommendation || "-")}</td>
+        </tr>`).join("")}</tbody>
     </table></div>`;
 }
 
@@ -952,6 +1008,21 @@ function confidenceBadge(value) {
 
 function policyResultBadge(value) {
   const label = String(value || "Unknown");
+  return `<span class="pill ${cssToken(label)}">${escapeHtml(label)}</span>`;
+}
+
+function policySeverityBadge(value) {
+  const label = String(value || "info").toUpperCase();
+  return `<span class="pill ${cssToken(label)}">${escapeHtml(label)}</span>`;
+}
+
+function findingSeverityBadge(value) {
+  const label = String(value || "warning").toUpperCase();
+  return `<span class="pill ${cssToken(label)}">${escapeHtml(label)}</span>`;
+}
+
+function policyAsCodeResultBadge(item) {
+  const label = item.matched ? String(item.policyResult || item.result || "Matched") : "NOT MATCHED";
   return `<span class="pill ${cssToken(label)}">${escapeHtml(label)}</span>`;
 }
 

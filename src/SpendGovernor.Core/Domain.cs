@@ -26,6 +26,28 @@ public enum PolicyAction
     Block
 }
 
+public enum SpendPolicySeverity
+{
+    Info,
+    Warn,
+    Fail
+}
+
+public enum SpendPolicyEvaluationStatus
+{
+    NotMatched,
+    Info,
+    Warn,
+    Fail
+}
+
+public enum SpendFindingSeverity
+{
+    Note,
+    Warning,
+    Error
+}
+
 public enum ResourceSourceType
 {
     Terraform,
@@ -317,6 +339,47 @@ public sealed class PolicyFinding
     public decimal? ThresholdValue { get; set; }
 }
 
+public sealed class SpendPolicyEvaluation
+{
+    public string PolicyId { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string Description { get; set; } = "";
+    public SpendPolicySeverity Severity { get; set; } = SpendPolicySeverity.Info;
+    public bool Matched { get; set; }
+    public SpendPolicyEvaluationStatus Result { get; set; } = SpendPolicyEvaluationStatus.NotMatched;
+    public string? MatchedResource { get; set; }
+    public string? MatchedResourceType { get; set; }
+    public string Message { get; set; } = "";
+    public string Recommendation { get; set; } = "";
+}
+
+public sealed class SpendFinding
+{
+    public string Id { get; set; } = "";
+    public string RuleId { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string Message { get; set; } = "";
+    public string Recommendation { get; set; } = "";
+    public SpendFindingSeverity Severity { get; set; } = SpendFindingSeverity.Warning;
+    public string Category { get; set; } = "";
+    public string? SourceFile { get; set; }
+    public int? StartLine { get; set; }
+    public int? StartColumn { get; set; }
+    public int? EndLine { get; set; }
+    public int? EndColumn { get; set; }
+    public string? ResourceName { get; set; }
+    public string? ResourceType { get; set; }
+    public string? Provider { get; set; }
+    public string? Environment { get; set; }
+    public decimal? EstimatedMonthlyCost { get; set; }
+    public decimal? EstimatedMonthlyDelta { get; set; }
+    public string Currency { get; set; } = "EUR";
+    public ConfidenceLevel? ConfidenceLevel { get; set; }
+    public string? PolicyId { get; set; }
+    public string? PricingSource { get; set; }
+    public string? PricingMatchType { get; set; }
+}
+
 public sealed class Recommendation
 {
     public Guid Id { get; init; } = Guid.NewGuid();
@@ -357,6 +420,8 @@ public sealed class AnalysisResult
     public IReadOnlyList<ResourceEstimate> ProposedResources { get; set; } = [];
     public IReadOnlyList<ResourceCostChange> CostChanges { get; set; } = [];
     public IReadOnlyList<PolicyFinding> PolicyFindings { get; set; } = [];
+    public IReadOnlyList<SpendPolicyEvaluation> PolicyAsCodeEvaluations { get; set; } = [];
+    public IReadOnlyList<SpendFinding> Findings { get; set; } = [];
     public IReadOnlyList<Recommendation> Recommendations { get; set; } = [];
     public IReadOnlyList<AuditEvent> AuditEvents { get; set; } = [];
     public string CommentMarkdown { get; set; } = "";
